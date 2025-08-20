@@ -302,7 +302,7 @@ INDEX_HTML = """
   <!-- Footer -->
   <footer class="mt-auto border-t border-white/10">
     <div class="mx-auto max-w-6xl px-4 py-6 text-center text-sm text-slate-300">
-      © A&T Group Strategy First AI Hackathon 2025
+      © A&T Group at Strategy First AI Hackathon 2025
     </div>
   </footer>
 
@@ -617,4 +617,5 @@ def audio_to_audio():
 if __name__ == '__main__':
     # Run Flask app (Render sets PORT via env var)
     port = int(os.getenv('PORT', 5000))
+
     app.run(host='0.0.0.0', port=port)
