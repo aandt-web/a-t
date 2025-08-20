@@ -103,10 +103,8 @@ INDEX_HTML = """
     <div class="mx-auto max-w-6xl px-4 py-5 flex items-center justify-between">
       <a href="#" class="flex items-center gap-3 group">
         <!-- Logo -->
-        <div class="h-10 w-10 rounded-xl p-[2px] shadow-lg" style="background:linear-gradient(135deg,var(--logo-grad-1),var(--logo-grad-2))">
-          <div class="h-full w-full rounded-[10px] bg-slate-900/70 grid place-items-center">
-            <img src="logo.jpg" alt="PDF AI" class="h-5 w-5 object-contain">
-          </div>
+        <div class="h-10 w-10 rounded-[10px] bg-slate-900/70 grid place-items-center">
+          <img src="images/logo.jpg" alt="Lingua Flow Logo" class="h-6 w-6 object-contain">
         </div>
         <div>
           <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
@@ -126,7 +124,7 @@ INDEX_HTML = """
       <div class="glass rounded-2xl shadow-glass p-6 md:p-8 flex flex-col justify-center">
         <h1 class="text-3xl md:text-4xl font-extrabold leading-tight">
           Transform documents & audio with
-          <span class="bg-clip-text text-transparent" style="background-image:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">real‑time AI</span>
+          <span class="bg-clip-text text-transparent" style="background-image:linear-gradient(90deg,var(--logo-grad-1),var--logo-grad-2))">real‑time AI</span>
         </h1>
         <p class="mt-3 text-slate-200/90">Extract, translate, and convert between text and speech in a single, elegant tool. Fast. Accurate. Private.</p>
         <ul class="mt-5 space-y-2 text-sm text-slate-200/90">
@@ -274,7 +272,7 @@ INDEX_HTML = """
         </div>
       </div>
       <div class="glass rounded-xl p-4 flex items-start gap-3">
-        <div class="rounded-md p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">
+        <div class="rounded-md p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var--logo-grad-2))">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 1v11"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M8 21h8"/></svg>
         </div>
         <div>
@@ -283,7 +281,7 @@ INDEX_HTML = """
         </div>
       </div>
       <div class="glass rounded-xl p-4 flex items-start gap-3">
-        <div class="rounded-md p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">
+        <div class="rounded-md p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var--logo-grad-2))">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 5v6"/><rect x="9" y="11" width="6" height="8" rx="2"/></svg>
         </div>
         <div>
@@ -614,6 +612,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
