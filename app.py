@@ -105,7 +105,7 @@ INDEX_HTML = """
         <!-- Logo -->
         <div class="h-10 w-10 rounded-xl p-[2px] shadow-lg" style="background:linear-gradient(135deg,var(--logo-grad-1),var(--logo-grad-2))">
           <div class="h-full w-full rounded-[10px] bg-slate-900/70 grid place-items-center">
-            <img src="https://via.placeholder.com/22" alt="Lingua Flow Logo" class="h-6 w-6 object-contain">
+            <img src="logo.jpg" alt="PDF AI" class="h-5 w-5 object-contain">
           </div>
         </div>
         <div>
@@ -614,6 +614,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
