@@ -104,7 +104,7 @@ INDEX_HTML = """
       <a href="#" class="flex items-center gap-3 group">
         <!-- Logo -->
         <div class="h-10 w-10 rounded-[10px] bg-slate-900/70 grid place-items-center">
-          <img src="logo.jpg" alt="Ligua Flow" class="h-5 w-5 object-contain">
+          <img src="https://drive.google.com/file/d/1C8mfePs4rN4Z-l318h-ruzFxmKnuAemP/view?usp=sharing" alt="Ligua Flow" class="h-5 w-5 object-contain">
         </div>
         <div>
           <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
@@ -612,6 +612,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
