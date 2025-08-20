@@ -105,12 +105,7 @@ INDEX_HTML = """
         <!-- Logo -->
         <div class="h-10 w-10 rounded-xl p-[2px] shadow-lg" style="background:linear-gradient(135deg,var(--logo-grad-1),var(--logo-grad-2))">
           <div class="h-full w-full rounded-[10px] bg-slate-900/70 grid place-items-center">
-            <!-- inline icon (doc+wave) -->
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="opacity-95">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <path d="M14 2v6h6"/>
-              <path d="M8 16c1.5-2 2.5 2 4 0s2.5-2 4 0"/>
-            </svg>
+            <img src="https://via.placeholder.com/22" alt="Lingua Flow Logo" class="h-6 w-6 object-contain">
           </div>
         </div>
         <div>
@@ -619,6 +614,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
