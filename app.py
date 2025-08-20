@@ -106,7 +106,7 @@ INDEX_HTML = """
         <!-- Logo -->
 <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo">
         <div>
-          <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
+          <div class="text-xl font-extrabold tracking-tight leading-5">PDF AI</div>
           <div class="text-xs text-slate-300/80 -mt-0.5">Transform • Translate • Speak</div>
         </div>
       </a>
@@ -612,6 +612,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
