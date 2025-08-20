@@ -104,7 +104,7 @@ INDEX_HTML = """
     <div class="mx-auto max-w-6xl px-4 py-5 flex items-center justify-between">
       <a href="#" class="flex items-center gap-3 group">
         <!-- Logo -->
-          <img src="logo.jpg" alt="Ligua Flow" class="h-11 w-11 object-contain">
+          <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="h-11 w-11 object-contain">
         <div>
           <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
           <div class="text-xs text-slate-300/80 -mt-0.5">Transform • Translate • Speak</div>
@@ -612,6 +612,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
