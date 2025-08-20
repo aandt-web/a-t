@@ -1,2 +1,3 @@
-PDF AI App for A\&T Group Hackathon 2025
+Ligua Flow App for A\&T Group at Strategy First AI Hackathon 2025
+
 
