@@ -114,7 +114,7 @@ INDEX_HTML = """
           </div>
         </div>
         <div>
-          <div class="text-xl font-extrabold tracking-tight leading-5">PDF&nbsp;AI</div>
+          <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
           <div class="text-xs text-slate-300/80 -mt-0.5">Transform • Translate • Speak</div>
         </div>
       </a>
@@ -302,7 +302,7 @@ INDEX_HTML = """
   <!-- Footer -->
   <footer class="mt-auto border-t border-white/10">
     <div class="mx-auto max-w-6xl px-4 py-6 text-center text-sm text-slate-300">
-      ©  First AI Hackathon 2025
+      © A & T Group at Strategy First AI Hackathon 2025
     </div>
   </footer>
 
@@ -619,6 +619,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
