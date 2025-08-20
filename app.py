@@ -104,7 +104,7 @@ INDEX_HTML = """
       <a href="#" class="flex items-center gap-3 group">
         <!-- Logo -->
         <div class="h-10 w-10 rounded-[10px] bg-slate-900/70 grid place-items-center">
-          <img src="images/logo.jpg" alt="Lingua Flow Logo" class="h-6 w-6 object-contain">
+          <img src="logo.jpg" alt="PDF AI" class="h-5 w-5 object-contain">
         </div>
         <div>
           <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
@@ -295,7 +295,7 @@ INDEX_HTML = """
   <!-- Footer -->
   <footer class="mt-auto border-t border-white/10">
     <div class="mx-auto max-w-6xl px-4 py-6 text-center text-sm text-slate-300">
-      © A & T Group at Strategy First AI Hackathon 2025
+      © A&T Group at Strategy First AI Hackathon 2025
     </div>
   </footer>
 
@@ -612,6 +612,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
