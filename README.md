@@ -1,12 +1,12 @@
-# 🌐 Lingua Flow
+# Lingua Flow
 
 > **AI-powered PDF and Audio Transformer**  
-> Convert PDFs into speech, translate text into multiple languages, and process audio seamlessly — all in one place.
+> Convert PDFs into speech, translate text into multiple languages, and process audio seamlessly, all in one place.
 
 
 ---
 
-## 🌍 Introduction
+## Introduction
 
 Lingua Flow is a simple but powerful system that transforms documents and audio into accessible formats.  
 It was designed to help students, researchers, and everyday users quickly:
@@ -20,7 +20,7 @@ This project is open-source and built to be extended by the community.
 
 ---
 
-## ✨ Features
+## Features
 
 - **PDF Processing**
   - Extract text from digital and scanned PDFs
@@ -49,7 +49,7 @@ This project is open-source and built to be extended by the community.
 
 ---
 
-## 🏗 How It Works
+## How It Works
 
 1. User uploads **PDF** or **Audio** file.  
 2. System extracts **text** (via OCR or speech recognition).  
@@ -60,7 +60,7 @@ This project is open-source and built to be extended by the community.
 
 ---
 
-## 🛠 Technology Stack
+## Technology Stack
 
 - **Backend**: Python + Flask  
 - **OCR & PDF Handling**: PyPDF2  
@@ -72,7 +72,7 @@ This project is open-source and built to be extended by the community.
 
 ---
 
-## 🌐 Live Demo (Render Hosting)
+## Live Demo (Render Hosting)
 
 Lingua Flow is deployed publicly using **Render**.  
 
@@ -82,7 +82,7 @@ When you open the URL in your browser, you’ll see the **web interface** where 
 
 ---
 
-### 🔗 Available Routes
+### Available Routes
 
 | Route                     | Description |
 |----------------------------|-------------|
@@ -94,7 +94,7 @@ When you open the URL in your browser, you’ll see the **web interface** where 
 
 ---
 
-### ⚡ Example Usages
+### Example Usages
 
 - **Open Web Interface**  
   Go to [https://lingua-flow.onrender.com/](https://lingua-flow.onrender.com/)  
@@ -104,3 +104,4 @@ When you open the URL in your browser, you’ll see the **web interface** where 
 
 ```bash
 curl -X POST -F "file=@document.pdf" https://lingua-flow.onrender.com/upload/pdf
+
