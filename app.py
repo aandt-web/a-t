@@ -173,7 +173,6 @@ INDEX_HTML = """
             </div>
           </div>
           <!-- Target Language -->
-
     <div id="langDiv">
   <label class="block text-sm font-semibold mb-2" for="lang">Target Language</label>
   <div class="relative">
@@ -526,6 +525,7 @@ def pdf_to_translate():
             return "No PDF uploaded", 400
         text = extract_text_from_pdf(pdf)
         translated = GoogleTranslator(source='auto', target=target).translate(text)
+        time.sleep(0.2)  # Add delay to respect rate limit (5 requests/sec)
         return jsonify({"translated_text": translated})
     except Exception as e:
         return str(e), 400
@@ -539,6 +539,7 @@ def pdf_to_translate_audio():
             return "No PDF uploaded", 400
         text = extract_text_from_pdf(pdf)
         translated = GoogleTranslator(source='auto', target=target).translate(text)
+        time.sleep(0.2)  # Add delay to respect rate limit (5 requests/sec)
         mp3_path = tts_to_tempfile(translated, target)
 
         @after_this_request
@@ -581,6 +582,7 @@ def audio_to_translate():
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)  # Clean up
         translated = GoogleTranslator(source='auto', target=target).translate(text)
+        time.sleep(0.2)  # Add delay to respect rate limit (5 requests/sec)
         return jsonify({"text": text, "translated_text": translated})
     except Exception as e:
         return str(e), 400
@@ -597,7 +599,9 @@ def audio_to_audio():
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)  # Clean up
-        mp3_path = tts_to_tempfile(text, target_lang)
+        translated = GoogleTranslator(source='auto', target=target_lang).translate(text)
+        time.sleep(0.2)  # Add delay to respect rate limit (5 requests/sec)
+        mp3_path = tts_to_tempfile(translated, target_lang)
 
         @after_this_request
         def cleanup(response):
@@ -614,26 +618,4 @@ def audio_to_audio():
 if __name__ == '__main__':
     # Run Flask app (Render sets PORT via env var)
     port = int(os.getenv('PORT', 5000))
-
     app.run(host='0.0.0.0', port=port)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
