@@ -23,8 +23,7 @@ VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT
 
 # HTML content (updated with audio-to-audio mode)
 INDEX_HTML = """
-
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -168,22 +167,28 @@ INDEX_HTML = """
                 <option value="audio_translate">Audio → Translate • STT and translate</option>
                 <option value="audio_audio">Audio → Audio • Speak back in target language</option>
               </select>
-              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300"><path d="M6 9l6 6 6-6"/></svg>
               </div>
             </div>
           </div>
           <!-- Target Language -->
-          <div id="langDiv">
-            <label class="block text-sm font-semibold mb-2" for="lang">Target Language</label>
-            <select id="lang" name="lang" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-3 pr-10 focus:outline-none focus:ring-2 focus:ring-brand-400">
-              <option value="en">English</option>
-              <option value="my">Myanmar</option>
-              <option value="fr">French</option>
-              <option value="es">Spanish</option>
-              <option value="de">German</option>
-            </select>
-          </div>
+
+    <div id="langDiv">
+  <label class="block text-sm font-semibold mb-2" for="lang">Target Language</label>
+  <div class="relative">
+    <select id="lang" name="lang" class="w-full appearance-none rounded-xl bg-slate-900/60 border border-white/10 px-4 py-3 pr-10 focus:outline-none focus:ring-2 focus:ring-brand-400">
+      <option value="en">English</option>
+      <option value="my">Myanmar</option>
+      <option value="fr">French</option>
+      <option value="es">Spanish</option>
+      <option value="de">German</option>
+    </select>
+    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+  </div>
+</div>
 
           <!-- PDF Input -->
           <div id="pdfInput">
@@ -399,7 +404,6 @@ INDEX_HTML = """
   </script>
 </body>
 </html>
-
 """
 
 # ---------------- Helpers ----------------
@@ -612,6 +616,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
