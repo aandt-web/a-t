@@ -110,7 +110,7 @@ INDEX_HTML = """
       </a>
       <div class="hidden md:flex items-center gap-2">
         <span class="brand-chip text-xs font-semibold text-white px-3 py-1.5 rounded-full shadow">AI Powered</span>
-        <span class="text-sm text-slate-300">20+ Languages</span>
+        <span class="text-sm text-slate-300">5+ Languages</span>
       </div>
     </div>
   </header>
@@ -616,6 +616,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
