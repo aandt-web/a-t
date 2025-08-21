@@ -29,7 +29,7 @@ INDEX_HTML = """
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ligua Flow – Transform Documents & Audio with AI</title>
+  <title>Lingua Flow – Transform Documents & Audio with AI</title>
   <!-- Tailwind (CDN for quick drop-in) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -106,7 +106,7 @@ INDEX_HTML = """
         <!-- Logo -->
 <img src="/static/logo.png" alt="Logo" class="h-11 w-11 object-contain">
         <div>
-          <div class="text-xl font-extrabold tracking-tight leading-5">PDF AI</div>
+          <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
           <div class="text-xs text-slate-300/80 -mt-0.5">Transform • Translate • Speak</div>
         </div>
       </a>
@@ -612,6 +612,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
 
     app.run(host='0.0.0.0', port=port)
+
 
 
 
