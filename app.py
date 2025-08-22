@@ -1,23 +1,30 @@
 import logging
 import time
-import sys
 import os
 import re
 from itertools import islice
 from flask import Flask, request, send_file, jsonify, after_this_request
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
-from gtts import gTTS
-import tempfile
 from deep_translator import GoogleTranslator
+from gtts import gTTS
+import speech_recognition as sr
+from pydub import AudioSegment
+import tempfile
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, filename='app.log')
 
-# Global variable declaration
-global USE_GOOGLE_CLOUD
-USE_GOOGLE_CLOUD = True  # Default to True if google-cloud-translate is installed
+app = Flask(__name__)
 
+# Constants
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_TEXT_LENGTH = 5000  # Max chars for translation/TTS
+VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT languages
+
+# Global variable for Google Cloud Translate (optional fallback)
+global USE_GOOGLE_CLOUD
+USE_GOOGLE_CLOUD = True
 try:
     import google.cloud.translate_v2 as translate
     translate_client = None  # Initialized lazily
@@ -25,29 +32,15 @@ except ImportError:
     logging.warning("Google Cloud Translate not found. Falling back to deep-translator.")
     USE_GOOGLE_CLOUD = False
 
-# Check for speech_recognition availability
-HAS_STT = True
-try:
-    import speech_recognition as sr
-    VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT languages
-except ImportError:
-    logging.warning("SpeechRecognition not found or incompatible. STT functionality disabled.")
-    HAS_STT = False
-    sr = None
-
-# Initialize Flask app
-app = Flask(__name__)
-
-# HTML content (unchanged, keep your existing INDEX_HTML)
-
-# HTML content (unchanged)
+# HTML content (unchanged from your input)
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lingua Flow – Transform Documents & Audio with AI</title>
+  <title>PDF AI – Transform Documents & Audio with AI</title>
+  <!-- Tailwind (CDN for quick drop-in) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -89,50 +82,67 @@ INDEX_HTML = """
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
   <style>
-    :root {
-      --bg-start: #0f172a;
-      --bg-end: #111827;
-      --grad-1: #1A1A2E;
-      --grad-2: #16213E;
-      --logo-grad-1: #6B46C1;
-      --logo-grad-2: #4C51BF;
+    :root{
+      --bg-start:#0f172a;
+      --bg-end:#111827;
+      --grad-1:#1A1A2E;
+      --grad-2:#16213E;
+      --logo-grad-1:#6B46C1;
+      --logo-grad-2:#4C51BF;
     }
-    html, body { height: 100% }
-    body { font-family: 'Inter', system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
-    .animated-bg {
+    html,body{height:100%}
+    body{font-family:'Inter',system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+    .animated-bg{
       background: linear-gradient(120deg, var(--grad-1), var(--grad-2));
       background-size: 400% 400%;
       animation: gradientShift 18s ease infinite;
     }
-    @keyframes gradientShift { 0% { background-position: 0% 50% } 50% { background-position: 100% 50% } 100% { background-position: 0% 50% } }
-    .glass { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08); }
-    .btn-primary { background: linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2)); }
-    .btn-primary:hover { filter: brightness(1.1) }
-    .brand-chip { background: linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2)); }
+    @keyframes gradientShift{
+      0%{background-position:0% 50%}
+      50%{background-position:100% 50%}
+      100%{background-position:0% 50%}
+    }
+    .glass{background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08);}
+    .btn-primary{background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2));}
+    .btn-primary:hover{filter:brightness(1.1)}
+    .brand-chip{background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2));}
   </style>
 </head>
 <body class="animated-bg min-h-screen text-slate-100 flex flex-col">
+  <!-- Header / Nav -->
   <header class="w-full">
     <div class="mx-auto max-w-6xl px-4 py-5 flex items-center justify-between">
       <a href="#" class="flex items-center gap-3 group">
-        <img src="/static/logo.png" alt="Logo" class="h-11 w-11 object-contain">
+        <!-- Logo -->
+        <div class="h-10 w-10 rounded-xl p-[2px] shadow-lg" style="background:linear-gradient(135deg,var(--logo-grad-1),var(--logo-grad-2))">
+          <div class="h-full w-full rounded-[10px] bg-slate-900/70 grid place-items-center">
+            <!-- inline icon (doc+wave) -->
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="opacity-95">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <path d="M14 2v6h6"/>
+              <path d="M8 16c1.5-2 2.5 2 4 0s2.5-2 4 0"/>
+            </svg>
+          </div>
+        </div>
         <div>
-          <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
+          <div class="text-xl font-extrabold tracking-tight leading-5">PDF&nbsp;AI</div>
           <div class="text-xs text-slate-300/80 -mt-0.5">Transform • Translate • Speak</div>
         </div>
       </a>
       <div class="hidden md:flex items-center gap-2">
         <span class="brand-chip text-xs font-semibold text-white px-3 py-1.5 rounded-full shadow">AI Powered</span>
-        <span class="text-sm text-slate-300">5+ Languages</span>
+        <span class="text-sm text-slate-300">20+ Languages</span>
       </div>
     </div>
   </header>
+
+  <!-- Hero -->
   <section class="mx-auto max-w-6xl px-4 pb-6">
     <div class="grid lg:grid-cols-2 gap-6 items-stretch">
       <div class="glass rounded-2xl shadow-glass p-6 md:p-8 flex flex-col justify-center">
         <h1 class="text-3xl md:text-4xl font-extrabold leading-tight">
           Transform documents & audio with
-          <span class="bg-clip-text text-transparent" style="background-image:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">real‑time AI</span>
+          <span class="bg-clip-text text-transparent" style="background-image:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">real‑time AI</span>
         </h1>
         <p class="mt-3 text-slate-200/90">Extract, translate, and convert between text and speech in a single, elegant tool. Fast. Accurate. Private.</p>
         <ul class="mt-5 space-y-2 text-sm text-slate-200/90">
@@ -154,7 +164,7 @@ INDEX_HTML = """
             </svg>
             Natural‑sounding text‑to‑speech
           </li>
-          <li class="flex items-start gap-3" style="%(stt_disabled)s">
+          <li class="flex items-start gap-3">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mt-0.5 text-brand-300">
               <path d="M20 6L9 17l-5-5"/>
             </svg>
@@ -162,8 +172,11 @@ INDEX_HTML = """
           </li>
         </ul>
       </div>
+
+      <!-- Card: Tool Form -->
       <div class="glass rounded-2xl shadow-glass p-6 md:p-8">
         <form id="toolForm" class="space-y-5" enctype="multipart/form-data">
+          <!-- Mode -->
           <div>
             <label class="block text-sm font-semibold mb-2" for="mode">Processing Mode</label>
             <div class="relative">
@@ -171,33 +184,33 @@ INDEX_HTML = """
                 <option value="pdf_audio">PDF → Audio • Convert PDF text to speech</option>
                 <option value="pdf_translate">PDF → Translate • Extract & translate text</option>
                 <option value="pdf_translate_audio">PDF → Translate → Audio • Translate then speech</option>
-                %(stt_options)s
+                <option value="audio_text">Audio → Text • Speech to text</option>
+                <option value="audio_translate">Audio → Translate • STT and translate</option>
+                <option value="audio_audio">Audio → Audio • Speak back in target language</option>
               </select>
-              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
+              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300"><path d="M6 9l6 6 6-6"/></svg>
               </div>
             </div>
           </div>
-          <div id="langDiv">
+          <!-- Target Language -->
+          <div>
             <label class="block text-sm font-semibold mb-2" for="lang">Target Language</label>
-            <div class="relative">
-              <select id="lang" name="lang" class="w-full appearance-none rounded-xl bg-slate-900/60 border border-white/10 px-4 py-3 pr-10 focus:outline-none focus:ring-2 focus:ring-brand-400">
-                <option value="en">English</option>
-                <option value="my">Myanmar</option>
-                <option value="fr">French</option>
-                <option value="es">Spanish</option>
-                <option value="de">German</option>
-              </select>
-              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300"><path d="M6 9l6 6 6-6"/></svg>
-              </div>
-            </div>
+            <select id="lang" name="lang" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-400">
+              <option value="en">English</option>
+              <option value="my">Myanmar</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+              <option value="de">German</option>
+            </select>
           </div>
+
+          <!-- PDF Input -->
           <div id="pdfInput">
             <label class="block text-sm font-semibold mb-2" for="pdf">1. Upload PDF</label>
             <label class="group flex items-center justify-between gap-4 rounded-xl border border-dashed border-white/15 bg-slate-900/50 p-4 hover:border-brand-300 cursor-pointer">
               <div class="flex items-center gap-3">
-                <div class="rounded-lg p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
+                <div class="rounded-lg p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                 </div>
                 <div>
@@ -209,11 +222,13 @@ INDEX_HTML = """
               <span id="pdfName" class="text-xs text-slate-300">No file chosen</span>
             </label>
           </div>
+
+          <!-- Audio Input -->
           <div id="audioInput" class="hidden">
             <label class="block text-sm font-semibold mb-2" for="audio">1. Upload Audio</label>
             <label class="group flex items-center justify-between gap-4 rounded-xl border border-dashed border-white/15 bg-slate-900/50 p-4 hover:border-brand-300 cursor-pointer">
               <div class="flex items-center gap-3">
-                <div class="rounded-lg p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
+                <div class="rounded-lg p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 1v11"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M8 21h8"/></svg>
                 </div>
                 <div>
@@ -225,17 +240,25 @@ INDEX_HTML = """
               <span id="audioName" class="text-xs text-slate-300">No file chosen</span>
             </label>
           </div>
+
+          <!-- STT language -->
           <div id="sttLangRow" class="hidden">
             <label for="stt_lang" class="block text-sm font-semibold mb-2">Speech Language (for STT)</label>
             <input id="stt_lang" name="stt_lang" type="text" value="en-US" placeholder="e.g., en-US, fr-FR" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-400"/>
           </div>
+
+          <!-- Submit -->
           <button type="submit" class="btn-primary w-full rounded-xl py-3.5 font-semibold text-white shadow-lg active:scale-[.99] transition">2. Start Processing</button>
+
+          <!-- Progress -->
           <div id="progressWrap" class="hidden h-2 w-full overflow-hidden rounded bg-white/10">
             <div class="h-full w-0 bg-white/60 animate-[loader_2s_ease_infinite]"></div>
           </div>
           <style>
-            @keyframes loader { 0% { width: 0 } 50% { width: 80% } 100% { width: 100% } }
+            @keyframes loader{ 0%{width:0} 50%{width:80%} 100%{width:100%}}
           </style>
+
+          <!-- Output -->
           <div class="space-y-3 pt-2">
             <audio id="player" class="hidden w-full" controls></audio>
             <textarea id="outputText" class="hidden w-full min-h-[140px] rounded-xl bg-slate-900/60 border border-white/10 p-3 text-sm" placeholder="Results will appear here"></textarea>
@@ -244,10 +267,12 @@ INDEX_HTML = """
       </div>
     </div>
   </section>
+
+  <!-- Features band -->
   <section class="mx-auto max-w-6xl px-4 pb-10">
     <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <div class="glass rounded-xl p-4 flex items-start gap-3">
-        <div class="rounded-md p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
+        <div class="rounded-md p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
         </div>
         <div>
@@ -256,7 +281,7 @@ INDEX_HTML = """
         </div>
       </div>
       <div class="glass rounded-xl p-4 flex items-start gap-3">
-        <div class="rounded-md p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
+        <div class="rounded-md p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
         </div>
         <div>
@@ -265,7 +290,7 @@ INDEX_HTML = """
         </div>
       </div>
       <div class="glass rounded-xl p-4 flex items-start gap-3">
-        <div class="rounded-md p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
+        <div class="rounded-md p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 1v11"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M8 21h8"/></svg>
         </div>
         <div>
@@ -273,8 +298,8 @@ INDEX_HTML = """
           <div class="text-xs text-slate-300">Natural voices, quick output.</div>
         </div>
       </div>
-      <div class="glass rounded-xl p-4 flex items-start gap-3" style="%(stt_disabled)s">
-        <div class="rounded-md p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
+      <div class="glass rounded-xl p-4 flex items-start gap-3">
+        <div class="rounded-md p-2" style="background:linear-gradient(90deg,var(--logo-grad-1),var(--logo-grad-2))">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 5v6"/><rect x="9" y="11" width="6" height="8" rx="2"/></svg>
         </div>
         <div>
@@ -284,17 +309,20 @@ INDEX_HTML = """
       </div>
     </div>
   </section>
+
+  <!-- Footer -->
   <footer class="mt-auto border-t border-white/10">
     <div class="mx-auto max-w-6xl px-4 py-6 text-center text-sm text-slate-300">
-      © A&T Group at Strategy First AI Hackathon 2025
+      © A&T Group Strategy First AI Hackathon 2025
     </div>
   </footer>
+
+  <!-- App Logic (kept compatible with your Flask endpoints) -->
   <script>
     const modeSel = document.getElementById('mode');
     const pdfInput = document.getElementById('pdfInput');
     const audioInput = document.getElementById('audioInput');
     const sttLangRow = document.getElementById('sttLangRow');
-    const langDiv = document.getElementById('langDiv');
     const progressWrap = document.getElementById('progressWrap');
     const player = document.getElementById('player');
     const outputText = document.getElementById('outputText');
@@ -303,32 +331,19 @@ INDEX_HTML = """
     const pdfName = document.getElementById('pdfName');
     const audioName = document.getElementById('audioName');
 
-    // Disable STT-related options if not available
-    const sttDisabled = !%(has_stt)s;
-    if (sttDisabled) {
-      const sttOptions = `
-        <option value="audio_text" disabled>Audio → Text • Speech to text (Disabled)</option>
-        <option value="audio_translate" disabled>Audio → Translate • STT and translate (Disabled)</option>
-        <option value="audio_audio" disabled>Audio → Audio • Speak back (Disabled)</option>
-      `;
-      document.getElementById('mode').innerHTML += sttOptions;
-      document.querySelectorAll('#sttLangRow, .stt-feature').forEach(el => el.style.display = 'none');
-    }
-
-    function updateFormVisibility() {
+    function updateFormVisibility(){
       const m = modeSel.value;
       const pdfNeeded = (m === 'pdf_audio' || m === 'pdf_translate' || m === 'pdf_translate_audio');
       pdfInput.classList.toggle('hidden', !pdfNeeded);
       audioInput.classList.toggle('hidden', pdfNeeded);
-      sttLangRow.classList.toggle('hidden', !(m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio') || sttDisabled);
-      langDiv.classList.toggle('hidden', m === 'pdf_audio' || m === 'audio_text');
+      sttLangRow.classList.toggle('hidden', !(m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio'));
     }
 
-    function updateFileStatus() {
+    function updateFileStatus(){
       const p = pdfFileInput?.files?.[0];
       const a = audioFileInput?.files?.[0];
-      if (p) pdfName.textContent = p.name; else pdfName.textContent = 'No file chosen';
-      if (a) audioName.textContent = a.name; else audioName.textContent = 'No file chosen';
+      if(p) pdfName.textContent = p.name; else pdfName.textContent = 'No file chosen';
+      if(a) audioName.textContent = a.name; else audioName.textContent = 'No file chosen';
     }
 
     modeSel.addEventListener('change', updateFormVisibility);
@@ -345,14 +360,8 @@ INDEX_HTML = """
 
       const m = modeSel.value;
       const lang = document.getElementById('lang').value;
-      const sttLang = document.getElementById('stt_lang')?.value || 'en-US';
-      const maxFileSize = 10 * 1024 * 1024;
-
-      if (sttDisabled && (m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio')) {
-        alert('Speech-to-Text functionality is disabled due to missing dependencies.');
-        progressWrap.classList.add('hidden');
-        return;
-      }
+      const sttLang = document.getElementById('stt_lang').value;
+      const maxFileSize = 10 * 1024 * 1024; // 10MB
 
       const fd = new FormData();
       if (m.startsWith('pdf')) {
@@ -360,13 +369,13 @@ INDEX_HTML = """
         if (!pdf) { alert('Please choose a PDF.'); progressWrap.classList.add('hidden'); return; }
         if (pdf.size > maxFileSize) { alert('Document is too large (max 10MB).'); progressWrap.classList.add('hidden'); return; }
         fd.append('pdf', pdf);
-        if (m !== 'pdf_audio') fd.append('lang', lang);
+        fd.append('lang', lang);
       } else {
         const audio = audioFileInput.files[0];
         if (!audio) { alert('Please choose an audio file.'); progressWrap.classList.add('hidden'); return; }
         if (audio.size > maxFileSize) { alert('Audio is too large (max 10MB).'); progressWrap.classList.add('hidden'); return; }
         fd.append('audio', audio);
-        if (m !== 'audio_text') fd.append('lang', lang);
+        fd.append('lang', lang);
         fd.append('stt_lang', sttLang);
       }
 
@@ -406,16 +415,6 @@ INDEX_HTML = """
       progressWrap.classList.add('hidden');
     });
   </script>
-  <script>
-    // Render HTML with dynamic STT status
-    document.body.innerHTML = document.body.innerHTML.replace('%(stt_disabled)s', sttDisabled ? 'display: none;' : '')
-      .replace('%(stt_options)s', sttDisabled ? '' : `
-        <option value="audio_text">Audio → Text • Speech to text</option>
-        <option value="audio_translate">Audio → Translate • STT and translate</option>
-        <option value="audio_audio">Audio → Audio • Speak back in target language</option>
-      `)
-      .replace('%(has_stt)s', HAS_STT);
-  </script>
 </body>
 </html>
 """
@@ -435,8 +434,6 @@ def limit_text(text: str) -> str:
     return text
 
 def validate_stt_lang(lang: str) -> str:
-    if not HAS_STT:
-        raise ValueError("Speech-to-Text functionality is disabled.")
     if lang not in VALID_STT_LANGS:
         raise ValueError(f"Invalid STT language code: {lang}")
     return lang
@@ -472,18 +469,12 @@ def tts_to_tempfile(text: str, lang: str) -> str:
     return tf.name
 
 def ensure_wav(input_path: str) -> str:
-    if not HAS_STT:
-        raise ValueError("Speech-to-Text functionality is disabled.")
-    from pydub import AudioSegment
     audio = AudioSegment.from_file(input_path)
     wav_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
     audio.set_channels(1).set_frame_rate(16000).export(wav_path, format='wav')
     return wav_path
 
 def convert_to_wav(audio_file) -> str:
-    if not HAS_STT:
-        raise ValueError("Speech-to-Text functionality is disabled.")
-    from pydub import AudioSegment
     tf = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
     try:
         audio = AudioSegment.from_file(audio_file)
@@ -494,93 +485,51 @@ def convert_to_wav(audio_file) -> str:
     return tf.name
 
 def stt_google(audio_path: str, language: str = 'en-US') -> str:
-    if not HAS_STT:
-        raise ValueError("Speech-to-Text functionality is disabled.")
     language = validate_stt_lang(language)
     recognizer = sr.Recognizer()
-    wav_path = ensure_wav(audio_path)
+    with sr.AudioFile(audio_path) as source:
+        audio_data = recognizer.record(source)
     try:
-        with sr.AudioFile(wav_path) as source:
-            audio_data = recognizer.record(source)
         return recognizer.recognize_google(audio_data, language=language)
     except sr.UnknownValueError:
         raise ValueError("Could not understand the audio.")
     except sr.RequestError as e:
         raise ValueError(f"Speech service error: {e}")
-    finally:
-        try:
-            os.unlink(wav_path)
-        except Exception as e:
-            logging.error(f"Failed to delete temp file {wav_path}: {e}")
-
-
-
-# Split text by sentences and cap segment size for Google
-SENTENCE_SEP = re.compile(r"([.!?]\s+)")
-
-def split_text_into_chunks(text: str, chunk_size: int = 4500):
-    parts = []
-    tokens = SENTENCE_SEP.split(text)
-    sentences = [a + (b or "") for a, b in zip(tokens[0::2], tokens[1::2])] + ([tokens[-1]] if len(tokens) % 2 else [])
-    buf = []
-    cur = 0
-    for s in sentences:
-        if cur + len(s) > chunk_size and buf:
-            parts.append("".join(buf))
-            buf, cur = [s], len(s)
-        else:
-            buf.append(s)
-            cur += len(s)
-    if buf:
-        parts.append("".join(buf))
-    return parts
-
-def batched(iterable, n):
-    it = iter(iterable)
-    while True:
-        chunk = list(islice(it, n))
-        if not chunk:
-            return
-        yield chunk
 
 def translate_text_resilient(text: str, target: str) -> str:
-    chunks = split_text_into_chunks(text)
-    gt = GoogleTranslator(source='auto', target=target)
-    out = []
-    for small_batch in batched(chunks, 5):  # up to 5 per batch
+    chunks = re.split(r'([.!?]\s+)', text)
+    sentences = [''.join(chunk) for chunk in zip(chunks[::2], chunks[1::2] + [''])]
+    translated = []
+    for i in range(0, len(sentences), 5):  # Batch 5 sentences
+        batch = sentences[i:i + 5]
         for attempt in range(3):
             try:
-                translated_batch = gt.translate_batch(small_batch)
+                translator = GoogleTranslator(source='auto', target=target)
+                translated_batch = translator.translate_batch(batch)
                 break
             except Exception as e:
+                logging.warning(f"Translation attempt {attempt + 1} failed: {e}")
                 time.sleep(1.5 * (attempt + 1))
         else:
-            translated_batch = [gt.translate(t) for t in small_batch]
-        out.extend(translated_batch)
-        time.sleep(0.25)  # throttle to stay < 5 req/sec
-    return " ".join(out)
+            translated_batch = [translator.translate(s) for s in batch]
+        translated.extend(translated_batch)
+        time.sleep(0.25)  # Rate limit buffer
+    return ' '.join(translated)
+
 # ---------- Routes ----------
 @app.route('/')
-def home():
-    from flask import render_template_string
-    return render_template_string(INDEX_HTML)
-
-@app.route('/health')
-def health():
-    return jsonify({"status": "ok"}), 200
+def index():
+    return INDEX_HTML
 
 @app.route('/pdf-to-audio', methods=['POST'])
 def pdf_to_audio():
-    logging.info("Received pdf-to-audio request")
     try:
         pdf = request.files.get('pdf')
+        lang = request.form.get('lang', 'en')
         if not pdf:
-            logging.error("No PDF file received")
             return "No PDF uploaded", 400
-        logging.info(f"Processing PDF: {pdf.filename}, size: {pdf.content_length}")
         text = extract_text_from_pdf(pdf)
-        mp3_path = tts_to_tempfile(text, 'en')  # Default to 'en' for testing
-
+        mp3_path = tts_to_tempfile(text, lang)
         @after_this_request
         def cleanup(response):
             try:
@@ -588,43 +537,33 @@ def pdf_to_audio():
             except Exception as e:
                 logging.error(f"Failed to delete temp file {mp3_path}: {e}")
             return response
-
         return send_file(mp3_path, mimetype='audio/mpeg', as_attachment=True, download_name='audiobook.mp3')
     except Exception as e:
-        logging.error(f"Error in pdf_to_audio: {str(e)}")
         return str(e), 400
 
 @app.route('/pdf-to-translate', methods=['POST'])
 def pdf_to_translate():
-    logging.info("Received pdf-to-translate request")
     try:
         pdf = request.files.get('pdf')
         target = request.form.get('lang', 'en')
         if not pdf:
-            logging.error("No PDF file received")
             return "No PDF uploaded", 400
-        logging.info(f"Processing PDF: {pdf.filename}, size: {pdf.content_length}")
         text = extract_text_from_pdf(pdf)
         translated = translate_text_resilient(text, target)
         return jsonify({"translated_text": translated})
     except Exception as e:
-        logging.error(f"Error in pdf_to_translate: {str(e)}")
         return str(e), 400
 
 @app.route('/pdf-to-translate-audio', methods=['POST'])
 def pdf_to_translate_audio():
-    logging.info("Received pdf-to-translate-audio request")
     try:
         pdf = request.files.get('pdf')
         target = request.form.get('lang', 'en')
         if not pdf:
-            logging.error("No PDF file received")
             return "No PDF uploaded", 400
-        logging.info(f"Processing PDF: {pdf.filename}, size: {pdf.content_length}")
         text = extract_text_from_pdf(pdf)
         translated = translate_text_resilient(text, target)
         mp3_path = tts_to_tempfile(translated, target)
-
         @after_this_request
         def cleanup(response):
             try:
@@ -632,73 +571,55 @@ def pdf_to_translate_audio():
             except Exception as e:
                 logging.error(f"Failed to delete temp file {mp3_path}: {e}")
             return response
-
         return send_file(mp3_path, mimetype='audio/mpeg', as_attachment=True, download_name='translated_audiobook.mp3')
     except Exception as e:
-        logging.error(f"Error in pdf_to_translate_audio: {str(e)}")
         return str(e), 400
 
 @app.route('/audio-to-text', methods=['POST'])
 def audio_to_text():
-    if not HAS_STT:
-        return "Speech-to-Text functionality is disabled.", 400
-    logging.info("Received audio-to-text request")
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
         if not audio:
-            logging.error("No audio file received")
             return "No audio uploaded", 400
-        logging.info(f"Processing audio: {audio.filename}, size: {audio.content_length}")
+        check_file_size(audio)
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
         return jsonify({"text": text})
     except Exception as e:
-        logging.error(f"Error in audio_to_text: {str(e)}")
         return str(e), 400
 
 @app.route('/audio-to-translate', methods=['POST'])
 def audio_to_translate():
-    if not HAS_STT:
-        return "Speech-to-Text functionality is disabled.", 400
-    logging.info("Received audio-to-translate request")
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
         target = request.form.get('lang', 'en')
         if not audio:
-            logging.error("No audio file received")
             return "No audio uploaded", 400
-        logging.info(f"Processing audio: {audio.filename}, size: {audio.content_length}")
+        check_file_size(audio)
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
         translated = translate_text_resilient(text, target)
         return jsonify({"text": text, "translated_text": translated})
     except Exception as e:
-        logging.error(f"Error in audio_to_translate: {str(e)}")
         return str(e), 400
 
 @app.route('/audio-to-audio', methods=['POST'])
 def audio_to_audio():
-    if not HAS_STT:
-        return "Speech-to-Text functionality is disabled.", 400
-    logging.info("Received audio-to-audio request")
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
         target_lang = request.form.get('lang', 'en')
         if not audio:
-            logging.error("No audio file received")
             return "No audio uploaded", 400
-        logging.info(f"Processing audio: {audio.filename}, size: {audio.content_length}")
+        check_file_size(audio)
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
-        translated = translate_text_resilient(text, target_lang)
-        mp3_path = tts_to_tempfile(translated, target_lang)
-
+        mp3_path = tts_to_tempfile(text, target_lang)
         @after_this_request
         def cleanup(response):
             try:
@@ -706,10 +627,8 @@ def audio_to_audio():
             except Exception as e:
                 logging.error(f"Failed to delete temp file {mp3_path}: {e}")
             return response
-
         return send_file(mp3_path, mimetype='audio/mpeg', as_attachment=True, download_name='translated_audio.mp3')
     except Exception as e:
-        logging.error(f"Error in audio_to_audio: {str(e)}")
         return str(e), 400
 
 if __name__ == '__main__':
