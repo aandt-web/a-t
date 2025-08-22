@@ -1,34 +1,37 @@
 import logging
 import time
 import sys
+import os
 from flask import Flask, request, send_file, jsonify, after_this_request
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
 from gtts import gTTS
-import os
-from deep_translator import GoogleTranslator  # Always include for free option
+import tempfile
+
+# Initialize Flask app
+app = Flask(__name__)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, filename='app.log')
 
-app = Flask(__name__)
-
 # Constants
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-MAX_TEXT_LENGTH = 5000  # Max chars for translation/TTS
-MAX_REQUEST_CHARS = 30000  # Google API max request size (~30k chars)
+MAX_TEXT_LENGTH = 5000  # Character limit for text processing
+MAX_REQUEST_CHARS = 5000  # Character limit for translation requests
 
-# Check for Google Cloud Translate availability
-USE_GOOGLE_CLOUD = True  # Default to True if installed
+# Global variable declaration
+USE_GOOGLE_CLOUD = True  # Default to True if google-cloud-translate is installed
+translate_client = None  # Will be initialized lazily
+
 try:
     import google.cloud.translate_v2 as translate
-    translate_client = None  # Initialized lazily
 except ImportError:
     logging.warning("Google Cloud Translate not found. Falling back to deep-translator.")
     USE_GOOGLE_CLOUD = False
 
 # Check for speech_recognition availability
 HAS_STT = True
+VALID_STT_LANGS = []
 try:
     import speech_recognition as sr
     VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT languages
@@ -411,13 +414,15 @@ INDEX_HTML = """
         <option value="audio_translate">Audio → Translate • STT and translate</option>
         <option value="audio_audio">Audio → Audio • Speak back in target language</option>
       `)
-      .replace('%(has_stt)s', HAS_STT);
+      .replace('%(has_stt)s', %(has_stt_lower)s);
   </script>
 </body>
 </html>
 """
 
 # ---------------- Helpers ----------------
+from deep_translator import GoogleTranslator  # Added here for free option
+
 def check_file_size(file):
     file.seek(0, os.SEEK_END)
     size = file.tell()
@@ -471,24 +476,29 @@ def tts_to_tempfile(text: str, lang: str) -> str:
 def ensure_wav(input_path: str) -> str:
     if not HAS_STT:
         raise ValueError("Speech-to-Text functionality is disabled.")
-    from pydub import AudioSegment
-    audio = AudioSegment.from_file(input_path)
-    wav_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
-    audio.set_channels(1).set_frame_rate(16000).export(wav_path, format='wav')
-    return wav_path
+    try:
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(input_path)
+        wav_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
+        audio.set_channels(1).set_frame_rate(16000).export(wav_path, format='wav')
+        return wav_path
+    except ImportError:
+        raise ValueError("pydub is required for audio processing but not installed")
 
 def convert_to_wav(audio_file) -> str:
     if not HAS_STT:
         raise ValueError("Speech-to-Text functionality is disabled.")
-    from pydub import AudioSegment
-    tf = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
     try:
+        from pydub import AudioSegment
+        tf = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
         audio = AudioSegment.from_file(audio_file)
         audio = audio.set_channels(1).set_frame_rate(16000)
         audio.export(tf.name, format='wav')
+        return tf.name
+    except ImportError:
+        raise ValueError("pydub is required for audio processing but not installed")
     except Exception as e:
         raise ValueError(f"Audio conversion failed: {str(e)}")
-    return tf.name
 
 def stt_google(audio_path: str, language: str = 'en-US') -> str:
     if not HAS_STT:
@@ -511,20 +521,26 @@ def stt_google(audio_path: str, language: str = 'en-US') -> str:
             logging.error(f"Failed to delete temp file {wav_path}: {e}")
 
 def get_translate_client():
+    global translate_client
     if not USE_GOOGLE_CLOUD:
         return None
     if translate_client is None:
-        import google.auth
-        from google.cloud import translate_v2
-        credentials_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-        if not credentials_json:
-            logging.error("GOOGLE_APPLICATION_CREDENTIALS_JSON not set. Falling back to deep-translator.")
-            global USE_GOOGLE_CLOUD
+        try:
+            import google.auth
+            from google.cloud import translate_v2
+            credentials_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+            if not credentials_json:
+                logging.error("GOOGLE_APPLICATION_CREDENTIALS_JSON not set. Falling back to deep-translator.")
+                global USE_GOOGLE_CLOUD
+                USE_GOOGLE_CLOUD = False
+                return None
+            import json
+            credentials = google.auth.credentials.Credentials.from_service_account_info(json.loads(credentials_json))
+            translate_client = translate_v2.Client(credentials=credentials)
+        except Exception as e:
+            logging.error(f"Failed to initialize Google Translate client: {e}")
             USE_GOOGLE_CLOUD = False
             return None
-        import json
-        credentials = google.auth.credentials.Credentials.from_service_account_info(json.loads(credentials_json))
-        translate_client = translate_v2.Client(credentials=credentials)
     return translate_client
 
 def translate_batch_text(text: str, target_lang: str) -> str:
@@ -544,8 +560,19 @@ def translate_batch_text(text: str, target_lang: str) -> str:
 # ---------- Routes ----------
 @app.route('/')
 def home():
-    from flask import render_template_string
-    return render_template_string(INDEX_HTML)
+    stt_disabled_style = 'display: none;' if not HAS_STT else ''
+    stt_options = '' if not HAS_STT else '''
+        <option value="audio_text">Audio → Text • Speech to text</option>
+        <option value="audio_translate">Audio → Translate • STT and translate</option>
+        <option value="audio_audio">Audio → Audio • Speak back in target language</option>
+    '''
+    has_stt_lower = str(HAS_STT).lower()
+    
+    html = INDEX_HTML.replace('%(stt_disabled)s', stt_disabled_style)
+    html = html.replace('%(stt_options)s', stt_options)
+    html = html.replace('%(has_stt_lower)s', has_stt_lower)
+    
+    return html
 
 @app.route('/pdf-to-audio', methods=['POST'])
 def pdf_to_audio():
@@ -642,32 +669,7 @@ def audio_to_translate():
         os.remove(wav_path)
         translated = translate_batch_text(text, target)
         return jsonify({"text": text, "translated_text": translated})
-    except Exception as e:
-        logging.error(f"Error in audio_to_translate: {str(e)}")
-        return str(e), 400
-
-@app.route('/audio-to-audio', methods=['POST'])
-def audio_to_audio():
-    if not HAS_STT:
-        return "Speech-to-Text functionality is disabled.", 400
-    try:
-        audio = request.files.get('audio')
-        stt_lang = request.form.get('stt_lang', 'en-US')
-        target_lang = request.form.get('lang', 'en')
-        if not audio:
-            return "No audio uploaded", 400
-        check_file_size(audio)
-        wav_path = convert_to_wav(audio)
-        text = stt_google(wav_path, language=stt_lang)
-        os.remove(wav_path)
-        translated = translate_batch_text(text, target_lang)
-        mp3_path = tts_to_tempfile(translated, target_lang)
-
-        @after_this_request
-        def cleanup(response):
-            try:
-                os.remove(mp3_path)
-            except Exception as e:
+    exceptException as e:
                 logging.error(f"Failed to delete temp file {mp3_path}: {e}")
             return response
 
