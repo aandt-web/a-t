@@ -559,7 +559,6 @@ def translate_text_resilient(text: str, target: str) -> str:
         out.extend(translated_batch)
         time.sleep(0.25)  # throttle to stay < 5 req/sec
     return " ".join(out)
-
 # ---------- Routes ----------
 @app.route('/')
 def home():
@@ -572,13 +571,15 @@ def health():
 
 @app.route('/pdf-to-audio', methods=['POST'])
 def pdf_to_audio():
+    logging.info("Received pdf-to-audio request")
     try:
         pdf = request.files.get('pdf')
-        lang = request.form.get('lang', 'en')
         if not pdf:
+            logging.error("No PDF file received")
             return "No PDF uploaded", 400
+        logging.info(f"Processing PDF: {pdf.filename}, size: {pdf.content_length}")
         text = extract_text_from_pdf(pdf)
-        mp3_path = tts_to_tempfile(text, lang)
+        mp3_path = tts_to_tempfile(text, 'en')  # Default to 'en' for testing
 
         @after_this_request
         def cleanup(response):
@@ -595,11 +596,14 @@ def pdf_to_audio():
 
 @app.route('/pdf-to-translate', methods=['POST'])
 def pdf_to_translate():
+    logging.info("Received pdf-to-translate request")
     try:
         pdf = request.files.get('pdf')
         target = request.form.get('lang', 'en')
         if not pdf:
+            logging.error("No PDF file received")
             return "No PDF uploaded", 400
+        logging.info(f"Processing PDF: {pdf.filename}, size: {pdf.content_length}")
         text = extract_text_from_pdf(pdf)
         translated = translate_text_resilient(text, target)
         return jsonify({"translated_text": translated})
@@ -609,11 +613,14 @@ def pdf_to_translate():
 
 @app.route('/pdf-to-translate-audio', methods=['POST'])
 def pdf_to_translate_audio():
+    logging.info("Received pdf-to-translate-audio request")
     try:
         pdf = request.files.get('pdf')
         target = request.form.get('lang', 'en')
         if not pdf:
+            logging.error("No PDF file received")
             return "No PDF uploaded", 400
+        logging.info(f"Processing PDF: {pdf.filename}, size: {pdf.content_length}")
         text = extract_text_from_pdf(pdf)
         translated = translate_text_resilient(text, target)
         mp3_path = tts_to_tempfile(translated, target)
@@ -635,12 +642,14 @@ def pdf_to_translate_audio():
 def audio_to_text():
     if not HAS_STT:
         return "Speech-to-Text functionality is disabled.", 400
+    logging.info("Received audio-to-text request")
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
         if not audio:
+            logging.error("No audio file received")
             return "No audio uploaded", 400
-        check_file_size(audio)
+        logging.info(f"Processing audio: {audio.filename}, size: {audio.content_length}")
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
@@ -653,13 +662,15 @@ def audio_to_text():
 def audio_to_translate():
     if not HAS_STT:
         return "Speech-to-Text functionality is disabled.", 400
+    logging.info("Received audio-to-translate request")
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
         target = request.form.get('lang', 'en')
         if not audio:
+            logging.error("No audio file received")
             return "No audio uploaded", 400
-        check_file_size(audio)
+        logging.info(f"Processing audio: {audio.filename}, size: {audio.content_length}")
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
@@ -673,13 +684,15 @@ def audio_to_translate():
 def audio_to_audio():
     if not HAS_STT:
         return "Speech-to-Text functionality is disabled.", 400
+    logging.info("Received audio-to-audio request")
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
         target_lang = request.form.get('lang', 'en')
         if not audio:
+            logging.error("No audio file received")
             return "No audio uploaded", 400
-        check_file_size(audio)
+        logging.info(f"Processing audio: {audio.filename}, size: {audio.content_length}")
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
@@ -702,5 +715,3 @@ def audio_to_audio():
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
-
