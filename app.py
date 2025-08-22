@@ -18,6 +18,7 @@ app = Flask(__name__)
 # Constants
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_TEXT_LENGTH = 5000  # Max chars for translation/TTS
+MAX_REQUEST_CHARS = 30000  # Google API max request size (~30k chars)
 VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT languages
 
 # Initialize Google Cloud Translate client
@@ -460,6 +461,16 @@ def stt_google(audio_path: str, language: str = 'en-US') -> str:
         except Exception as e:
             logging.error(f"Failed to delete temp file {wav_path}: {e}")
 
+def translate_batch_text(text: str, target_lang: str) -> str:
+    try:
+        # Split text into chunks if it exceeds max request size
+        chunks = [text[i:i + MAX_REQUEST_CHARS] for i in range(0, len(text), MAX_REQUEST_CHARS)]
+        translated_chunks = translate_client.translate(chunks, target_language=target_lang)
+        return " ".join([result['translatedText'] for result in translated_chunks])
+    except Exception as e:
+        logging.error(f"Translation Error: {e}")
+        raise ValueError(f"Translation failed: {str(e)}")
+
 # ---------- Routes ----------
 @app.route('/')
 def home():
@@ -497,9 +508,7 @@ def pdf_to_translate():
         if not pdf:
             return "No PDF uploaded", 400
         text = extract_text_from_pdf(pdf)
-        translations = translate_client.translate([text], target_language=target)
-        translated = translations[0]['translatedText']
-        time.sleep(0.5)
+        translated = translate_batch_text(text, target)
         return jsonify({"translated_text": translated})
     except Exception as e:
         logging.error(f"Error in pdf_to_translate: {str(e)}")
@@ -513,9 +522,7 @@ def pdf_to_translate_audio():
         if not pdf:
             return "No PDF uploaded", 400
         text = extract_text_from_pdf(pdf)
-        translations = translate_client.translate([text], target_language=target)
-        translated = translations[0]['translatedText']
-        time.sleep(0.5)
+        translated = translate_batch_text(text, target)
         mp3_path = tts_to_tempfile(translated, target)
 
         @after_this_request
@@ -559,9 +566,7 @@ def audio_to_translate():
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
-        translations = translate_client.translate([text], target_language=target)
-        translated = translations[0]['translatedText']
-        time.sleep(0.5)
+        translated = translate_batch_text(text, target)
         return jsonify({"text": text, "translated_text": translated})
     except Exception as e:
         logging.error(f"Error in audio_to_translate: {str(e)}")
@@ -579,9 +584,7 @@ def audio_to_audio():
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
-        translations = translate_client.translate([text], target_language=target_lang)
-        translated = translations[0]['translatedText']
-        time.sleep(0.5)
+        translated = translate_batch_text(text, target_lang)
         mp3_path = tts_to_tempfile(translated, target_lang)
 
         @after_this_request
