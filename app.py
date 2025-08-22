@@ -35,6 +35,9 @@ except ImportError:
     HAS_STT = False
     sr = None
 
+# Initialize Flask app
+app = Flask(__name__)
+
 # HTML content (unchanged, keep your existing INDEX_HTML)
 
 # HTML content (unchanged)
@@ -699,4 +702,5 @@ def audio_to_audio():
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
 
