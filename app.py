@@ -35,6 +35,8 @@ except ImportError:
     HAS_STT = False
     sr = None
 
+# HTML content (unchanged, keep your existing INDEX_HTML)
+
 # HTML content (unchanged)
 INDEX_HTML = """
 <!DOCTYPE html>
@@ -508,22 +510,7 @@ def stt_google(audio_path: str, language: str = 'en-US') -> str:
         except Exception as e:
             logging.error(f"Failed to delete temp file {wav_path}: {e}")
 
-def get_translate_client():
-    if not USE_GOOGLE_CLOUD:
-        return None
-    if translate_client is None:
-        import google.auth
-        from google.cloud import translate_v2
-        credentials_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-        if not credentials_json:
-            logging.error("GOOGLE_APPLICATION_CREDENTIALS_JSON not set. Falling back to deep-translator.")
-            global USE_GOOGLE_CLOUD
-            USE_GOOGLE_CLOUD = False
-            return None
-        import json
-        credentials = google.auth.credentials.Credentials.from_service_account_info(json.loads(credentials_json))
-        translate_client = translate_v2.Client(credentials=credentials)
-    return translate_client
+
 
 # Split text by sentences and cap segment size for Google
 SENTENCE_SEP = re.compile(r"([.!?]\s+)")
@@ -712,3 +699,4 @@ def audio_to_audio():
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
