@@ -226,7 +226,7 @@ def audio_to_text():
         return str(e), 400
 
 @app.route('/audio-to-translate', methods=['POST'])
-def audio_to_translate():
+def audio_to-translate():
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
