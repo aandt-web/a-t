@@ -4,27 +4,20 @@ import time
 from flask import Flask, request, send_file, jsonify, after_this_request
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
-from google.cloud import translate_v2 as translate
 from gtts import gTTS
 import speech_recognition as sr
 from pydub import AudioSegment
 import tempfile
 import os
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# ✅ Google Cloud Translation API
+from google.cloud import translate_v2 as translate
+translate_client = translate.Client()
 
 app = Flask(__name__)
 
-# Constants
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-MAX_TEXT_LENGTH = 5000  # Max chars for translation/TTS
-VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT languages
 
-# Initialize Google Cloud Translate client
-client = translate.Client()
-
-# HTML content (using INDEX_HTML from app.py)
+# HTML content (updated with audio-to-audio mode)
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -408,225 +401,186 @@ INDEX_HTML = """
 </html>
 """
 
-# ---------------- Helpers ----------------
-def check_file_size(file):
-    file.seek(0, os.SEEK_END)
-    size = file.tell()
-    file.seek(0)
-    if size > MAX_FILE_SIZE:
-        raise ValueError(f"File size exceeds {MAX_FILE_SIZE / 1024 / 1024}MB limit")
-    return file
-
-def limit_text(text: str) -> str:
-    if len(text) > MAX_TEXT_LENGTH:
-        return text[:MAX_TEXT_LENGTH]
-    return text
-
-def validate_stt_lang(lang: str) -> str:
-    if lang not in VALID_STT_LANGS:
-        raise ValueError(f"Invalid STT language code: {lang}")
-    return lang
-
-def extract_text_from_pdf(file_storage) -> str:
+# ---------- PDF Handling ----------
+def extract_text_from_pdf(pdf_file):
     try:
-        check_file_size(file_storage)
-        reader = PdfReader(file_storage)
-    except PdfReadError:
-        raise ValueError("Invalid or corrupted PDF file. Please try another file.")
+        pdf = PdfReader(pdf_file)
+        text = ""
+        for page in pdf.pages:
+            text += page.extract_text() or ""
+        return text
+    except PdfReadError as e:
+        logging.error(f"PDF Read Error: {e}")
+        return None
 
-    if reader.is_encrypted:
-        try:
-            reader.decrypt("")
-        except Exception:
-            raise ValueError("This PDF is password protected and cannot be processed.")
-
-    text = []
-    for page in reader.pages:
-        extracted = page.extract_text()
-        if extracted:
-            text.append(extracted)
-    result = "\n".join(text).strip()
-    if not result:
-        raise ValueError("No readable text found in the PDF.")
-    return limit_text(result)
-
-def tts_to_tempfile(text: str, lang: str) -> str:
-    text = limit_text(text)
-    tf = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    tf.close()
-    gTTS(text=text, lang=lang).save(tf.name)
-    return tf.name
-
-def ensure_wav(input_path: str) -> str:
-    audio = AudioSegment.from_file(input_path)
-    wav_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
-    audio.set_channels(1).set_frame_rate(16000).export(wav_path, format='wav')
-    return wav_path
-
-def convert_to_wav(audio_file) -> str:
-    tf = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+# ---------- Translation ----------
+def translate_text(text, target_lang="en"):
     try:
-        # Use pydub to convert the uploaded file to wav
-        audio = AudioSegment.from_file(audio_file)
-        audio = audio.set_channels(1).set_frame_rate(16000)
-        audio.export(tf.name, format='wav')
+        result = translate_client.translate(text, target_language=target_lang)
+        return result["translatedText"]
     except Exception as e:
-        raise ValueError(f"Audio conversion failed: {str(e)}")
-    return tf.name
+        logging.error(f"Translation Error: {e}")
+        return None
 
-def stt_google(audio_path: str, language: str = 'en-US') -> str:
-    language = validate_stt_lang(language)
+# ---------- Speech to Text ----------
+def speech_to_text(audio_file, lang="en-US"):
     recognizer = sr.Recognizer()
-    wav_path = ensure_wav(audio_path)
+    with sr.AudioFile(audio_file) as source:
+        audio = recognizer.record(source)
     try:
-        with sr.AudioFile(wav_path) as source:
-            audio_data = recognizer.record(source)
-        return recognizer.recognize_google(audio_data, language=language)
+        return recognizer.recognize_google(audio, language=lang)
     except sr.UnknownValueError:
-        raise ValueError("Could not understand the audio.")
+        return None
     except sr.RequestError as e:
-        raise ValueError(f"Speech service error: {e}")
-    finally:
-        try:
-            os.unlink(wav_path)
-        except Exception as e:
-            logging.error(f"Failed to delete temp file {wav_path}: {e}")
+        logging.error(f"STT Error: {e}")
+        return None
+
+# ---------- Text to Speech ----------
+def text_to_speech(text, lang="en"):
+    try:
+        tts = gTTS(text=text, lang=lang)
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        tts.save(tmp_file.name)
+        return tmp_file.name
+    except Exception as e:
+        logging.error(f"TTS Error: {e}")
+        return None
 
 # ---------- Routes ----------
-@app.route('/')
-def index():
-    return INDEX_HTML
+@app.route("/")
+def home():
+    return "Lingua-Flow (Google Translate API version)"
 
-@app.route('/pdf-to-audio', methods=['POST'])
-def pdf_to_audio():
-    try:
-        pdf = request.files.get('pdf')
-        lang = request.form.get('lang', 'en')
-        if not pdf:
-            return "No PDF uploaded", 400
-        text = extract_text_from_pdf(pdf)
-        mp3_path = tts_to_tempfile(text, lang)
+# --- PDF Upload & Translate ---
+@app.route("/pdf/translate", methods=["POST"])
+def pdf_translate():
+    file = request.files.get("file")
+    target_lang = request.form.get("target_lang", "en")
 
-        @after_this_request
-        def cleanup(response):
-            try:
-                os.remove(mp3_path)
-            except Exception as e:
-                logging.error(f"Failed to delete temp file {mp3_path}: {e}")
-            return response
+    if not file:
+        return jsonify({"error": "No PDF uploaded"}), 400
 
-        return send_file(mp3_path, mimetype='audio/mpeg', as_attachment=True, download_name='audiobook.mp3')
-    except Exception as e:
-        return str(e), 400
+    text = extract_text_from_pdf(file)
+    if not text:
+        return jsonify({"error": "PDF extraction failed"}), 500
 
-@app.route('/pdf-to-translate', methods=['POST'])
-def pdf_to_translate():
-    try:
-        pdf = request.files.get('pdf')
-        target = request.form.get('lang', 'en')
-        if not pdf:
-            return "No PDF uploaded", 400
-        text = extract_text_from_pdf(pdf)
-        # Batch translation for a single text
-        translations = client.translate([text], target_language=target)
-        translated = translations[0]['translatedText']
-        time.sleep(0.2)  # Delay to stay under 5 requests/sec
-        return jsonify({"translated_text": translated})
-    except Exception as e:
-        return str(e), 400
+    translated = translate_text(text, target_lang)
+    if not translated:
+        return jsonify({"error": "Translation failed"}), 500
 
-@app.route('/pdf-to-translate-audio', methods=['POST'])
-def pdf_to_translate_audio():
-    try:
-        pdf = request.files.get('pdf')
-        target = request.form.get('lang', 'en')
-        if not pdf:
-            return "No PDF uploaded", 400
-        text = extract_text_from_pdf(pdf)
-        # Batch translation for a single text
-        translations = client.translate([text], target_language=target)
-        translated = translations[0]['translatedText']
-        time.sleep(0.2)  # Delay to stay under 5 requests/sec
-        mp3_path = tts_to_tempfile(translated, target)
+    return jsonify({"translated": translated})
 
-        @after_this_request
-        def cleanup(response):
-            try:
-                os.remove(mp3_path)
-            except Exception as e:
-                logging.error(f"Failed to delete temp file {mp3_path}: {e}")
-            return response
+# --- PDF → Translate + Audio ---
+@app.route("/pdf/translate_audio", methods=["POST"])
+def pdf_translate_audio():
+    file = request.files.get("file")
+    target_lang = request.form.get("target_lang", "en")
 
-        return send_file(mp3_path, mimetype='audio/mpeg', as_attachment=True, download_name='translated_audiobook.mp3')
-    except Exception as e:
-        return str(e), 400
+    if not file:
+        return jsonify({"error": "No PDF uploaded"}), 400
 
-@app.route('/audio-to-text', methods=['POST'])
-def audio_to_text():
-    try:
-        audio = request.files.get('audio')
-        stt_lang = request.form.get('stt_lang', 'en-US')
-        if not audio:
-            return "No audio uploaded", 400
-        check_file_size(audio)
-        wav_path = convert_to_wav(audio)
-        text = stt_google(wav_path, language=stt_lang)
-        os.remove(wav_path)  # Clean up
-        return jsonify({"text": text})
-    except Exception as e:
-        return str(e), 400
+    text = extract_text_from_pdf(file)
+    if not text:
+        return jsonify({"error": "PDF extraction failed"}), 500
 
-@app.route('/audio-to-translate', methods=['POST'])
-def audio_to_translate():
-    try:
-        audio = request.files.get('audio')
-        stt_lang = request.form.get('stt_lang', 'en-US')
-        target = request.form.get('lang', 'en')
-        if not audio:
-            return "No audio uploaded", 400
-        check_file_size(audio)
-        wav_path = convert_to_wav(audio)
-        text = stt_google(wav_path, language=stt_lang)
-        os.remove(wav_path)  # Clean up
-        # Batch translation for a single text
-        translations = client.translate([text], target_language=target)
-        translated = translations[0]['translatedText']
-        time.sleep(0.2)  # Delay to stay under 5 requests/sec
-        return jsonify({"text": text, "translated_text": translated})
-    except Exception as e:
-        return str(e), 400
+    translated = translate_text(text, target_lang)
+    if not translated:
+        return jsonify({"error": "Translation failed"}), 500
 
-@app.route('/audio-to-audio', methods=['POST'])
-def audio_to_audio():
-    try:
-        audio = request.files.get('audio')
-        stt_lang = request.form.get('stt_lang', 'en-US')
-        target_lang = request.form.get('lang', 'en')
-        if not audio:
-            return "No audio uploaded", 400
-        check_file_size(audio)
-        wav_path = convert_to_wav(audio)
-        text = stt_google(wav_path, language=stt_lang)
-        os.remove(wav_path)  # Clean up
-        # Batch translation for a single text
-        translations = client.translate([text], target_language=target_lang)
-        translated = translations[0]['translatedText']
-        time.sleep(0.2)  # Delay to stay under 5 requests/sec
-        mp3_path = tts_to_tempfile(translated, target_lang)
+    audio_path = text_to_speech(translated, lang=target_lang)
+    if not audio_path:
+        return jsonify({"error": "TTS failed"}), 500
 
-        @after_this_request
-        def cleanup(response):
-            try:
-                os.remove(mp3_path)
-            except Exception as e:
-                logging.error(f"Failed to delete temp file {mp3_path}: {e}")
-            return response
+    @after_this_request
+    def cleanup(response):
+        try:
+            os.remove(audio_path)
+        except Exception as e:
+            logging.error(f"Cleanup error: {e}")
+        return response
 
-        return send_file(mp3_path, mimetype='audio/mpeg', as_attachment=True, download_name='translated_audio.mp3')
-    except Exception as e:
-        return str(e), 400
+    return send_file(audio_path, as_attachment=True, download_name="translated_audio.mp3")
 
-if __name__ == '__main__':
-    # Run Flask app (Render sets PORT via env var)
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+# --- Audio → Text ---
+@app.route("/audio/transcribe", methods=["POST"])
+def audio_transcribe():
+    file = request.files.get("file")
+    lang = request.form.get("lang", "en-US")
+
+    if not file:
+        return jsonify({"error": "No audio uploaded"}), 400
+
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    file.save(tmp_file.name)
+
+    text = speech_to_text(tmp_file.name, lang)
+    os.remove(tmp_file.name)
+
+    if not text:
+        return jsonify({"error": "STT failed"}), 500
+
+    return jsonify({"transcribed": text})
+
+# --- Audio → Translate ---
+@app.route("/audio/translate", methods=["POST"])
+def audio_translate():
+    file = request.files.get("file")
+    target_lang = request.form.get("target_lang", "en")
+
+    if not file:
+        return jsonify({"error": "No audio uploaded"}), 400
+
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    file.save(tmp_file.name)
+
+    text = speech_to_text(tmp_file.name)
+    os.remove(tmp_file.name)
+
+    if not text:
+        return jsonify({"error": "STT failed"}), 500
+
+    translated = translate_text(text, target_lang)
+    if not translated:
+        return jsonify({"error": "Translation failed"}), 500
+
+    return jsonify({"translated": translated})
+
+# --- Audio → Translate + Speak ---
+@app.route("/audio/translate_audio", methods=["POST"])
+def audio_translate_audio():
+    file = request.files.get("file")
+    target_lang = request.form.get("target_lang", "en")
+
+    if not file:
+        return jsonify({"error": "No audio uploaded"}), 400
+
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    file.save(tmp_file.name)
+
+    text = speech_to_text(tmp_file.name)
+    os.remove(tmp_file.name)
+
+    if not text:
+        return jsonify({"error": "STT failed"}), 500
+
+    translated = translate_text(text, target_lang)
+    if not translated:
+        return jsonify({"error": "Translation failed"}), 500
+
+    audio_path = text_to_speech(translated, lang=target_lang)
+    if not audio_path:
+        return jsonify({"error": "TTS failed"}), 500
+
+    @after_this_request
+    def cleanup(response):
+        try:
+            os.remove(audio_path)
+        except Exception as e:
+            logging.error(f"Cleanup error: {e}")
+        return response
+
+    return send_file(audio_path, as_attachment=True, download_name="translated_audio.mp3")
+
+# ---------- Run ----------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
