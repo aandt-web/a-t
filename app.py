@@ -1,6 +1,7 @@
 import logging
 import time
 import os
+import sys
 from flask import Flask, request, send_file, jsonify, after_this_request
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
@@ -11,10 +12,11 @@ import speech_recognition as sr
 from pydub import AudioSegment
 
 # Initialize Flask app
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static')
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, filename='app.log')
+logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 # Constants
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -77,7 +79,6 @@ def tts_to_tempfile(text: str, lang: str) -> str:
 def convert_to_wav(audio_file) -> str:
     try:
         check_file_size(audio_file)
-        # Save uploaded file to a temp location
         temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=f".{audio_file.filename.split('.')[-1]}")
         audio_file.save(temp_input.name)
         temp_input.close()
@@ -145,7 +146,6 @@ def translate_batch_text(text: str, target_lang: str) -> str:
             if client:
                 translated_chunks = client.translate(chunks, target_language=target_lang)
                 return " ".join([result['translatedText'] for result in translated_chunks])
-        # Fallback to deep-translator with batching and throttling
         translated_chunks = []
         for i in range(0, len(chunks), 10):  # Batch 10 chunks
             batch = chunks[i:i + 10]
@@ -541,12 +541,17 @@ def home():
         <option value="audio_translate">Audio → Translate • STT and translate</option>
         <option value="audio_audio">Audio → Audio • Speak back in target language</option>
     '''
-    html = INDEX_HTML % {
-        'stt_disabled': stt_disabled_style,
-        'stt_options': stt_options,
-        'has_stt': str(HAS_STT).lower()
-    }
-    return html
+    try:
+        html = INDEX_HTML % {
+            'stt_disabled': stt_disabled_style,
+            'stt_options': stt_options,
+            'has_stt': str(HAS_STT).lower()
+        }
+        logging.info("Home page rendered successfully")
+        return html
+    except Exception as e:
+        logging.error(f"Error rendering home page: {str(e)}")
+        return str(e), 500
 
 @app.route('/pdf-to-audio', methods=['POST'])
 def pdf_to_audio():
