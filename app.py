@@ -4,7 +4,7 @@ import time
 from flask import Flask, request, send_file, jsonify, after_this_request
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
-from deep_translator import GoogleTranslator
+from google.cloud import translate_v2 as translate
 from gtts import gTTS
 import speech_recognition as sr
 from pydub import AudioSegment
@@ -21,7 +21,10 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_TEXT_LENGTH = 5000  # Max chars for translation/TTS
 VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT languages
 
-# HTML content (updated with audio-to-audio mode)
+# Initialize Google Cloud Translate client
+client = translate.Client()
+
+# HTML content (using INDEX_HTML from app.py)
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -524,8 +527,10 @@ def pdf_to_translate():
         if not pdf:
             return "No PDF uploaded", 400
         text = extract_text_from_pdf(pdf)
-        translated = GoogleTranslator(source='auto', target=target).translate(text)
-        time.sleep(0.2)  # Add delay to respect rate limit (5 requests/sec)
+        # Batch translation for a single text
+        translations = client.translate([text], target_language=target)
+        translated = translations[0]['translatedText']
+        time.sleep(0.2)  # Delay to stay under 5 requests/sec
         return jsonify({"translated_text": translated})
     except Exception as e:
         return str(e), 400
@@ -538,8 +543,10 @@ def pdf_to_translate_audio():
         if not pdf:
             return "No PDF uploaded", 400
         text = extract_text_from_pdf(pdf)
-        translated = GoogleTranslator(source='auto', target=target).translate(text)
-        time.sleep(0.2)  # Add delay to respect rate limit (5 requests/sec)
+        # Batch translation for a single text
+        translations = client.translate([text], target_language=target)
+        translated = translations[0]['translatedText']
+        time.sleep(0.2)  # Delay to stay under 5 requests/sec
         mp3_path = tts_to_tempfile(translated, target)
 
         @after_this_request
@@ -581,8 +588,10 @@ def audio_to_translate():
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)  # Clean up
-        translated = GoogleTranslator(source='auto', target=target).translate(text)
-        time.sleep(0.2)  # Add delay to respect rate limit (5 requests/sec)
+        # Batch translation for a single text
+        translations = client.translate([text], target_language=target)
+        translated = translations[0]['translatedText']
+        time.sleep(0.2)  # Delay to stay under 5 requests/sec
         return jsonify({"text": text, "translated_text": translated})
     except Exception as e:
         return str(e), 400
@@ -599,8 +608,10 @@ def audio_to_audio():
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)  # Clean up
-        translated = GoogleTranslator(source='auto', target=target_lang).translate(text)
-        time.sleep(0.2)  # Add delay to respect rate limit (5 requests/sec)
+        # Batch translation for a single text
+        translations = client.translate([text], target_language=target_lang)
+        translated = translations[0]['translatedText']
+        time.sleep(0.2)  # Delay to stay under 5 requests/sec
         mp3_path = tts_to_tempfile(translated, target_lang)
 
         @after_this_request
