@@ -7,6 +7,9 @@ from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
 from gtts import gTTS
 import tempfile
+from deep_translator import GoogleTranslator
+import speech_recognition as sr
+import pydub
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -40,7 +43,120 @@ except ImportError:
     HAS_STT = False
     sr = None
 
-# HTML content (unchanged)
+# Helper functions
+def check_file_size(file):
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)  # Reset file pointer to the beginning
+    if file_size > MAX_FILE_SIZE:
+        raise ValueError(f"File size exceeds the limit of {MAX_FILE_SIZE / (1024 * 1024)}MB")
+
+def extract_text_from_pdf(pdf_file) -> str:
+    try:
+        check_file_size(pdf_file)
+        reader = PdfReader(pdf_file)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+        if len(text) > MAX_TEXT_LENGTH:
+            text = text[:MAX_TEXT_LENGTH]
+            logging.warning(f"PDF text truncated to {MAX_TEXT_LENGTH} characters.")
+        return text
+    except PdfReadError as e:
+        raise ValueError(f"Failed to read PDF: {str(e)}")
+    except Exception as e:
+        raise ValueError(f"Error extracting text from PDF: {str(e)}")
+
+def tts_to_tempfile(text: str, lang: str) -> str:
+    try:
+        tts = gTTS(text=text, lang=lang, slow=False)
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        tts.save(temp_file.name)
+        temp_file.close()
+        return temp_file.name
+    except Exception as e:
+        raise ValueError(f"Text-to-speech conversion failed: {str(e)}")
+
+def convert_to_wav(audio_file) -> str:
+    try:
+        check_file_size(audio_file)
+        temp_audio_path = tempfile.NamedTemporaryFile(delete=False, suffix="." + audio_file.filename.split(".")[-1])
+        audio_file.save(temp_audio_path.name)
+        temp_audio_path.close()
+
+        audio = pydub.AudioSegment.from_file(temp_audio_path.name)
+        wav_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+        audio.export(wav_path, format="wav")
+        os.unlink(temp_audio_path.name)
+        return wav_path
+    except Exception as e:
+        raise ValueError(f"Audio conversion failed: {str(e)}")
+
+def validate_stt_lang(lang: str) -> str:
+    if lang not in VALID_STT_LANGS:
+        logging.warning(f"Unsupported STT language '{lang}'. Falling back to 'en-US'.")
+        return 'en-US'
+    return lang
+
+def stt_google(audio_path: str, language: str = 'en-US') -> str:
+    if not HAS_STT:
+        raise ValueError("Speech-to-Text functionality is disabled.")
+    language = validate_stt_lang(language)
+    recognizer = sr.Recognizer()
+    wav_path = convert_to_wav(audio_path) # Use convert_to_wav here
+    try:
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+        return recognizer.recognize_google(audio_data, language=language)
+    except sr.UnknownValueError:
+        raise ValueError("Could not understand the audio.")
+    except sr.RequestError as e:
+        raise ValueError(f"Speech service error: {e}")
+    finally:
+        try:
+            os.unlink(wav_path)
+        except Exception as e:
+            logging.error(f"Failed to delete temp file {wav_path}: {e}")
+
+def get_translate_client():
+    global translate_client
+
+    if not USE_GOOGLE_CLOUD:
+        return None
+    if translate_client is None:
+        try:
+            import google.auth
+            from google.cloud import translate_v2
+            credentials_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+            if not credentials_json:
+                logging.error("GOOGLE_APPLICATION_CREDENTIALS_JSON not set. Falling back to deep-translator.")
+
+                USE_GOOGLE_CLOUD = False
+                return None
+            import json
+            credentials = google.auth.credentials.Credentials.from_service_account_info(json.loads(credentials_json))
+            translate_client = translate_v2.Client(credentials=credentials)
+        except Exception as e:
+            logging.error(f"Failed to initialize Google Translate client: {e}")
+            USE_GOOGLE_CLOUD = False
+            return None
+    return translate_client
+
+def translate_batch_text(text: str, target_lang: str) -> str:
+    try:
+        chunks = [text[i:i + MAX_REQUEST_CHARS] for i in range(0, len(text), MAX_REQUEST_CHARS)]
+        if USE_GOOGLE_CLOUD:
+            client = get_translate_client()
+            if client:
+                translated_chunks = client.translate(chunks, target_language=target_lang)
+                return " ".join([result['translatedText'] for result in translated_chunks])
+        translated_chunks = [GoogleTranslator(source='auto', target=target_lang).translate(chunk) for chunk in chunks]
+        return " ".join(translated_chunks)
+    except Exception as e:
+        logging.error(f"Translation Error: {e}")
+        raise ValueError(f"Translation failed: {str(e)}")
+
+# HTML content (corrected and completed JavaScript)
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -76,8 +192,7 @@ INDEX_HTML = """
             }
           },
           boxShadow: {
-            glass: '0 10px 30px rgba(0,0,0,.35)'
-          },
+           glass: '0 10px 30px rgba(0,0,0,.35)'         },
           backdropBlur: {
             xs: '2px'
           }
@@ -257,7 +372,7 @@ INDEX_HTML = """
       </div>
       <div class="glass rounded-xl p-4 flex items-start gap-3">
         <div class="rounded-md p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
         </div>
         <div>
           <div class="font-semibold">Translate</div>
@@ -318,244 +433,94 @@ INDEX_HTML = """
     function updateFormVisibility() {
       const m = modeSel.value;
       const pdfNeeded = (m === 'pdf_audio' || m === 'pdf_translate' || m === 'pdf_translate_audio');
-      pdfInput.classList.toggle('hidden', !pdfNeeded);
-      audioInput.classList.toggle('hidden', pdfNeeded);
-      sttLangRow.classList.toggle('hidden', !(m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio') || sttDisabled);
-      langDiv.classList.toggle('hidden', m === 'pdf_audio' || m === 'audio_text');
-    }
+      const audioNeeded = (m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio');
+      const sttLangNeeded = (m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio');
+      const langNeeded = (m === 'pdf_audio' || m === 'pdf_translate' || m === 'pdf_translate_audio' || m === 'audio_translate' || m === 'audio_audio');
 
-    function updateFileStatus() {
-      const p = pdfFileInput?.files?.[0];
-      const a = audioFileInput?.files?.[0];
-      if (p) pdfName.textContent = p.name; else pdfName.textContent = 'No file chosen';
-      if (a) audioName.textContent = a.name; else audioName.textContent = 'No file chosen';
+      pdfInput.classList.toggle('hidden', !pdfNeeded);
+      audioInput.classList.toggle('hidden', !audioNeeded);
+      sttLangRow.classList.toggle('hidden', !sttLangNeeded);
+      langDiv.classList.toggle('hidden', !langNeeded);
+
+      // Reset file inputs when switching modes
+      if (pdfNeeded) {
+        audioFileInput.value = '';
+        audioName.textContent = 'No file chosen';
+      } else if (audioNeeded) {
+        pdfFileInput.value = '';
+        pdfName.textContent = 'No file chosen';
+      }
     }
 
     modeSel.addEventListener('change', updateFormVisibility);
-    pdfFileInput.addEventListener('change', updateFileStatus);
-    audioFileInput.addEventListener('change', updateFileStatus);
-    updateFormVisibility();
+    updateFormVisibility(); // Initial call
 
-    document.getElementById('toolForm').addEventListener('submit', async (e) => {
+    pdfFileInput.addEventListener('change', function() {
+      pdfName.textContent = this.files.length > 0 ? this.files[0].name : 'No file chosen';
+    });
+
+    audioFileInput.addEventListener('change', function() {
+      audioName.textContent = this.files.length > 0 ? this.files[0].name : 'No file chosen';
+    });
+
+    document.getElementById('toolForm').addEventListener('submit', async function(e) {
       e.preventDefault();
       progressWrap.classList.remove('hidden');
       player.classList.add('hidden');
       outputText.classList.add('hidden');
       outputText.value = '';
 
-      const m = modeSel.value;
-      const lang = document.getElementById('lang').value;
-      const sttLang = document.getElementById('stt_lang')?.value || 'en-US';
-      const maxFileSize = 10 * 1024 * 1024;
+      const mode = modeSel.value;
+      const formData = new FormData(this);
+      let url = '';
 
-      if (sttDisabled && (m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio')) {
-        alert('Speech-to-Text functionality is disabled due to missing dependencies.');
-        progressWrap.classList.add('hidden');
-        return;
+      if (mode === 'pdf_audio') {
+        url = '/pdf-to-audio';
+      } else if (mode === 'pdf_translate') {
+        url = '/pdf-to-translate';
+      } else if (mode === 'pdf_translate_audio') {
+        url = '/pdf-to-translate-audio';
+      } else if (mode === 'audio_text') {
+        url = '/audio-to-text';
+      } else if (mode === 'audio_translate') {
+        url = '/audio-to-translate';
+      } else if (mode === 'audio_audio') {
+        url = '/audio-to-audio';
       }
-
-      const fd = new FormData();
-      if (m.startsWith('pdf')) {
-        const pdf = pdfFileInput.files[0];
-        if (!pdf) { alert('Please choose a PDF.'); progressWrap.classList.add('hidden'); return; }
-        if (pdf.size > maxFileSize) { alert('Document is too large (max 10MB).'); progressWrap.classList.add('hidden'); return; }
-        fd.append('pdf', pdf);
-        if (m !== 'pdf_audio') fd.append('lang', lang);
-      } else {
-        const audio = audioFileInput.files[0];
-        if (!audio) { alert('Please choose an audio file.'); progressWrap.classList.add('hidden'); return; }
-        if (audio.size > maxFileSize) { alert('Audio is too large (max 10MB).'); progressWrap.classList.add('hidden'); return; }
-        fd.append('audio', audio);
-        if (m !== 'audio_text') fd.append('lang', lang);
-        fd.append('stt_lang', sttLang);
-      }
-
-      const endpoints = {
-        pdf_audio: '/pdf-to-audio',
-        pdf_translate: '/pdf-to-translate',
-        pdf_translate_audio: '/pdf-to-translate-audio',
-        audio_text: '/audio-to-text',
-        audio_translate: '/audio-to-translate',
-        audio_audio: '/audio-to-audio'
-      };
 
       try {
-        const res = await fetch(endpoints[m], { method: 'POST', body: fd });
-        if (!res.ok) {
-          const msg = await res.text();
-          alert(`Error: ${msg}`);
-          progressWrap.classList.add('hidden');
-          return;
+        const response = await fetch(url, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(errorText || 'An unknown error occurred.');
         }
 
-        if (m === 'pdf_audio' || m === 'pdf_translate_audio' || m === 'audio_audio') {
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          player.src = url;
+        if (mode.includes('audio') && !mode.includes('text')) { // If the result is an audio file
+          const blob = await response.blob();
+          const audioUrl = URL.createObjectURL(blob);
+          player.src = audioUrl;
           player.classList.remove('hidden');
-        } else {
-          const data = await res.json();
-          const text = data.translated_text || data.text || JSON.stringify(data);
-          outputText.value = text;
+        } else { // If the result is text/json
+          const data = await response.json();
+          outputText.value = data.translated_text || data.text || JSON.stringify(data, null, 2);
           outputText.classList.remove('hidden');
         }
-      } catch (e) {
-        alert(`Network error: ${e.message}`);
+      } catch (error) {
+        console.error('Error:', error);
+        outputText.value = 'Error: ' + error.message;
+        outputText.classList.remove('hidden');
+      } finally {
+        progressWrap.classList.add('hidden');
       }
-
-      progressWrap.classList.add('hidden');
     });
-  </script>
-  <script>
-    // Render HTML with dynamic STT status
-    document.body.innerHTML = document.body.innerHTML.replace('%(stt_disabled)s', sttDisabled ? 'display: none;' : '')
-      .replace('%(stt_options)s', sttDisabled ? '' : `
-        <option value="audio_text">Audio → Text • Speech to text</option>
-        <option value="audio_translate">Audio → Translate • STT and translate</option>
-        <option value="audio_audio">Audio → Audio • Speak back in target language</option>
-      `)
-      .replace('%(has_stt)s', %(has_stt_lower)s);
   </script>
 </body>
 </html>
 """
-
-# ---------------- Helpers ----------------
-from deep_translator import GoogleTranslator  # Added here for free option
-
-def check_file_size(file):
-    file.seek(0, os.SEEK_END)
-    size = file.tell()
-    file.seek(0)
-    if size > MAX_FILE_SIZE:
-        raise ValueError(f"File size exceeds {MAX_FILE_SIZE / 1024 / 1024}MB limit")
-    return file
-
-def limit_text(text: str) -> str:
-    if len(text) > MAX_TEXT_LENGTH:
-        return text[:MAX_TEXT_LENGTH]
-    return text
-
-def validate_stt_lang(lang: str) -> str:
-    if not HAS_STT:
-        raise ValueError("Speech-to-Text functionality is disabled.")
-    if lang not in VALID_STT_LANGS:
-        raise ValueError(f"Invalid STT language code: {lang}")
-    return lang
-
-def extract_text_from_pdf(file_storage) -> str:
-    try:
-        check_file_size(file_storage)
-        reader = PdfReader(file_storage)
-    except PdfReadError:
-        raise ValueError("Invalid or corrupted PDF file. Please try another file.")
-
-    if reader.is_encrypted:
-        try:
-            reader.decrypt("")
-        except Exception:
-            raise ValueError("This PDF is password protected and cannot be processed.")
-
-    text = []
-    for page in reader.pages:
-        extracted = page.extract_text()
-        if extracted:
-            text.append(extracted)
-    result = "\n".join(text).strip()
-    if not result:
-        raise ValueError("No readable text found in the PDF.")
-    return limit_text(result)
-
-def tts_to_tempfile(text: str, lang: str) -> str:
-    text = limit_text(text)
-    tf = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    tf.close()
-    gTTS(text=text, lang=lang).save(tf.name)
-    return tf.name
-
-def ensure_wav(input_path: str) -> str:
-    if not HAS_STT:
-        raise ValueError("Speech-to-Text functionality is disabled.")
-    try:
-        from pydub import AudioSegment
-        audio = AudioSegment.from_file(input_path)
-        wav_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
-        audio.set_channels(1).set_frame_rate(16000).export(wav_path, format='wav')
-        return wav_path
-    except ImportError:
-        raise ValueError("pydub is required for audio processing but not installed")
-
-def convert_to_wav(audio_file) -> str:
-    if not HAS_STT:
-        raise ValueError("Speech-to-Text functionality is disabled.")
-    try:
-        from pydub import AudioSegment
-        tf = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
-        audio = AudioSegment.from_file(audio_file)
-        audio = audio.set_channels(1).set_frame_rate(16000)
-        audio.export(tf.name, format='wav')
-        return tf.name
-    except ImportError:
-        raise ValueError("pydub is required for audio processing but not installed")
-    except Exception as e:
-        raise ValueError(f"Audio conversion failed: {str(e)}")
-
-def stt_google(audio_path: str, language: str = 'en-US') -> str:
-    if not HAS_STT:
-        raise ValueError("Speech-to-Text functionality is disabled.")
-    language = validate_stt_lang(language)
-    recognizer = sr.Recognizer()
-    wav_path = ensure_wav(audio_path)
-    try:
-        with sr.AudioFile(wav_path) as source:
-            audio_data = recognizer.record(source)
-        return recognizer.recognize_google(audio_data, language=language)
-    except sr.UnknownValueError:
-        raise ValueError("Could not understand the audio.")
-    except sr.RequestError as e:
-        raise ValueError(f"Speech service error: {e}")
-    finally:
-        try:
-            os.unlink(wav_path)
-        except Exception as e:
-            logging.error(f"Failed to delete temp file {wav_path}: {e}")
-
-def get_translate_client():
-    global translate_client
-    if not USE_GOOGLE_CLOUD:
-        return None
-    if translate_client is None:
-        try:
-            import google.auth
-            from google.cloud import translate_v2
-            credentials_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-            if not credentials_json:
-                logging.error("GOOGLE_APPLICATION_CREDENTIALS_JSON not set. Falling back to deep-translator.")
-                global USE_GOOGLE_CLOUD
-                USE_GOOGLE_CLOUD = False
-                return None
-            import json
-            credentials = google.auth.credentials.Credentials.from_service_account_info(json.loads(credentials_json))
-            translate_client = translate_v2.Client(credentials=credentials)
-        except Exception as e:
-            logging.error(f"Failed to initialize Google Translate client: {e}")
-            USE_GOOGLE_CLOUD = False
-            return None
-    return translate_client
-
-def translate_batch_text(text: str, target_lang: str) -> str:
-    try:
-        chunks = [text[i:i + MAX_REQUEST_CHARS] for i in range(0, len(text), MAX_REQUEST_CHARS)]
-        if USE_GOOGLE_CLOUD:
-            client = get_translate_client()
-            if client:
-                translated_chunks = client.translate(chunks, target_language=target_lang)
-                return " ".join([result['translatedText'] for result in translated_chunks])
-        translated_chunks = [GoogleTranslator(source='auto', target=target_lang).translate(chunk) for chunk in chunks]
-        return " ".join(translated_chunks)
-    except Exception as e:
-        logging.error(f"Translation Error: {e}")
-        raise ValueError(f"Translation failed: {str(e)}")
 
 # ---------- Routes ----------
 @app.route('/')
@@ -570,7 +535,7 @@ def home():
     
     html = INDEX_HTML.replace('%(stt_disabled)s', stt_disabled_style)
     html = html.replace('%(stt_options)s', stt_options)
-    html = html.replace('%(has_stt_lower)s', has_stt_lower)
+    html = html.replace('%(has_stt)s', has_stt_lower) # Corrected placeholder
     
     return html
 
@@ -644,7 +609,7 @@ def audio_to_text():
         stt_lang = request.form.get('stt_lang', 'en-US')
         if not audio:
             return "No audio uploaded", 400
-        check_file_size(audio)
+        # check_file_size(audio) # Already handled in convert_to_wav
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
@@ -663,13 +628,38 @@ def audio_to_translate():
         target = request.form.get('lang', 'en')
         if not audio:
             return "No audio uploaded", 400
-        check_file_size(audio)
+        # check_file_size(audio) # Already handled in convert_to_wav
         wav_path = convert_to_wav(audio)
         text = stt_google(wav_path, language=stt_lang)
         os.remove(wav_path)
         translated = translate_batch_text(text, target)
         return jsonify({"text": text, "translated_text": translated})
-    exceptException as e:
+    except Exception as e: # Corrected syntax
+        logging.error(f"Error in audio_to_translate: {str(e)}")
+        return str(e), 400
+
+@app.route('/audio-to-audio', methods=['POST'])
+def audio_to_audio():
+    if not HAS_STT:
+        return "Speech-to-Text functionality is disabled.", 400
+    try:
+        audio = request.files.get('audio')
+        stt_lang = request.form.get('stt_lang', 'en-US')
+        target = request.form.get('lang', 'en')
+        if not audio:
+            return "No audio uploaded", 400
+        # check_file_size(audio) # Already handled in convert_to_wav
+        wav_path = convert_to_wav(audio)
+        text = stt_google(wav_path, language=stt_lang)
+        os.remove(wav_path)
+        translated = translate_batch_text(text, target)
+        mp3_path = tts_to_tempfile(translated, target)
+
+        @after_this_request
+        def cleanup(response):
+            try:
+                os.remove(mp3_path)
+            except Exception as e:
                 logging.error(f"Failed to delete temp file {mp3_path}: {e}")
             return response
 
