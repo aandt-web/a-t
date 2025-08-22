@@ -5,9 +5,6 @@ from flask import Flask, request, send_file, jsonify, after_this_request
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
 from gtts import gTTS
-import speech_recognition as sr
-from pydub import AudioSegment
-import tempfile
 import os
 from deep_translator import GoogleTranslator  # Always include for free option
 
@@ -20,7 +17,6 @@ app = Flask(__name__)
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_TEXT_LENGTH = 5000  # Max chars for translation/TTS
 MAX_REQUEST_CHARS = 30000  # Google API max request size (~30k chars)
-VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT languages
 
 # Check for Google Cloud Translate availability
 USE_GOOGLE_CLOUD = True  # Default to True if installed
@@ -32,7 +28,17 @@ except ImportError:
     USE_GOOGLE_CLOUD = False
     translate_client = None
 
-# HTML content (unchanged)
+# Check for speech_recognition availability
+HAS_STT = True
+try:
+    import speech_recognition as sr
+    VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT languages
+except ImportError:
+    logging.warning("SpeechRecognition not found or incompatible. STT functionality disabled.")
+    HAS_STT = False
+    sr = None
+
+# HTML content (unchanged, but adjust JS if STT is disabled)
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -146,7 +152,7 @@ INDEX_HTML = """
             </svg>
             Natural‑sounding text‑to‑speech
           </li>
-          <li class="flex items-start gap-3">
+          <li class="flex items-start gap-3" style="%(stt_disabled)s">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mt-0.5 text-brand-300">
               <path d="M20 6L9 17l-5-5"/>
             </svg>
@@ -163,9 +169,7 @@ INDEX_HTML = """
                 <option value="pdf_audio">PDF → Audio • Convert PDF text to speech</option>
                 <option value="pdf_translate">PDF → Translate • Extract & translate text</option>
                 <option value="pdf_translate_audio">PDF → Translate → Audio • Translate then speech</option>
-                <option value="audio_text">Audio → Text • Speech to text</option>
-                <option value="audio_translate">Audio → Translate • STT and translate</option>
-                <option value="audio_audio">Audio → Audio • Speak back in target language</option>
+                %(stt_options)s
               </select>
               <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300"><path d="M6 9l6 6 6-6"/></svg>
@@ -267,7 +271,7 @@ INDEX_HTML = """
           <div class="text-xs text-slate-300">Natural voices, quick output.</div>
         </div>
       </div>
-      <div class="glass rounded-xl p-4 flex items-start gap-3">
+      <div class="glass rounded-xl p-4 flex items-start gap-3" style="%(stt_disabled)s">
         <div class="rounded-md p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 5v6"/><rect x="9" y="11" width="6" height="8" rx="2"/></svg>
         </div>
@@ -297,12 +301,24 @@ INDEX_HTML = """
     const pdfName = document.getElementById('pdfName');
     const audioName = document.getElementById('audioName');
 
+    // Disable STT-related options if not available
+    const sttDisabled = !%(has_stt)s;
+    if (sttDisabled) {
+      const sttOptions = `
+        <option value="audio_text" disabled>Audio → Text • Speech to text (Disabled)</option>
+        <option value="audio_translate" disabled>Audio → Translate • STT and translate (Disabled)</option>
+        <option value="audio_audio" disabled>Audio → Audio • Speak back (Disabled)</option>
+      `;
+      document.getElementById('mode').innerHTML += sttOptions;
+      document.querySelectorAll('#sttLangRow, .stt-feature').forEach(el => el.style.display = 'none');
+    }
+
     function updateFormVisibility() {
       const m = modeSel.value;
       const pdfNeeded = (m === 'pdf_audio' || m === 'pdf_translate' || m === 'pdf_translate_audio');
       pdfInput.classList.toggle('hidden', !pdfNeeded);
       audioInput.classList.toggle('hidden', pdfNeeded);
-      sttLangRow.classList.toggle('hidden', !(m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio'));
+      sttLangRow.classList.toggle('hidden', !(m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio') || sttDisabled);
       langDiv.classList.toggle('hidden', m === 'pdf_audio' || m === 'audio_text');
     }
 
@@ -327,8 +343,14 @@ INDEX_HTML = """
 
       const m = modeSel.value;
       const lang = document.getElementById('lang').value;
-      const sttLang = document.getElementById('stt_lang').value;
+      const sttLang = document.getElementById('stt_lang')?.value || 'en-US';
       const maxFileSize = 10 * 1024 * 1024;
+
+      if (sttDisabled && (m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio')) {
+        alert('Speech-to-Text functionality is disabled due to missing dependencies.');
+        progressWrap.classList.add('hidden');
+        return;
+      }
 
       const fd = new FormData();
       if (m.startsWith('pdf')) {
@@ -382,6 +404,16 @@ INDEX_HTML = """
       progressWrap.classList.add('hidden');
     });
   </script>
+  <script>
+    // Render HTML with dynamic STT status
+    document.body.innerHTML = document.body.innerHTML.replace('%(stt_disabled)s', sttDisabled ? 'display: none;' : '')
+      .replace('%(stt_options)s', sttDisabled ? '' : `
+        <option value="audio_text">Audio → Text • Speech to text</option>
+        <option value="audio_translate">Audio → Translate • STT and translate</option>
+        <option value="audio_audio">Audio → Audio • Speak back in target language</option>
+      `)
+      .replace('%(has_stt)s', HAS_STT);
+  </script>
 </body>
 </html>
 """
@@ -401,6 +433,8 @@ def limit_text(text: str) -> str:
     return text
 
 def validate_stt_lang(lang: str) -> str:
+    if not HAS_STT:
+        raise ValueError("Speech-to-Text functionality is disabled.")
     if lang not in VALID_STT_LANGS:
         raise ValueError(f"Invalid STT language code: {lang}")
     return lang
@@ -436,12 +470,18 @@ def tts_to_tempfile(text: str, lang: str) -> str:
     return tf.name
 
 def ensure_wav(input_path: str) -> str:
+    if not HAS_STT:
+        raise ValueError("Speech-to-Text functionality is disabled.")
+    from pydub import AudioSegment
     audio = AudioSegment.from_file(input_path)
     wav_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
     audio.set_channels(1).set_frame_rate(16000).export(wav_path, format='wav')
     return wav_path
 
 def convert_to_wav(audio_file) -> str:
+    if not HAS_STT:
+        raise ValueError("Speech-to-Text functionality is disabled.")
+    from pydub import AudioSegment
     tf = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
     try:
         audio = AudioSegment.from_file(audio_file)
@@ -452,6 +492,8 @@ def convert_to_wav(audio_file) -> str:
     return tf.name
 
 def stt_google(audio_path: str, language: str = 'en-US') -> str:
+    if not HAS_STT:
+        raise ValueError("Speech-to-Text functionality is disabled.")
     language = validate_stt_lang(language)
     recognizer = sr.Recognizer()
     wav_path = ensure_wav(audio_path)
@@ -551,6 +593,8 @@ def pdf_to_translate_audio():
 
 @app.route('/audio-to-text', methods=['POST'])
 def audio_to_text():
+    if not HAS_STT:
+        return "Speech-to-Text functionality is disabled.", 400
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
@@ -567,6 +611,8 @@ def audio_to_text():
 
 @app.route('/audio-to-translate', methods=['POST'])
 def audio_to_translate():
+    if not HAS_STT:
+        return "Speech-to-Text functionality is disabled.", 400
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
@@ -585,6 +631,8 @@ def audio_to_translate():
 
 @app.route('/audio-to-audio', methods=['POST'])
 def audio_to_audio():
+    if not HAS_STT:
+        return "Speech-to-Text functionality is disabled.", 400
     try:
         audio = request.files.get('audio')
         stt_lang = request.form.get('stt_lang', 'en-US')
