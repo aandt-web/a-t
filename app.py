@@ -21,12 +21,11 @@ MAX_REQUEST_CHARS = 30000  # Google API max request size (~30k chars)
 # Check for Google Cloud Translate availability
 USE_GOOGLE_CLOUD = True  # Default to True if installed
 try:
-    from google.cloud import translate_v2 as translate
-    translate_client = translate.Client()
+    import google.cloud.translate_v2 as translate
+    translate_client = None  # Initialized lazily
 except ImportError:
     logging.warning("Google Cloud Translate not found. Falling back to deep-translator.")
     USE_GOOGLE_CLOUD = False
-    translate_client = None
 
 # Check for speech_recognition availability
 HAS_STT = True
@@ -38,7 +37,7 @@ except ImportError:
     HAS_STT = False
     sr = None
 
-# HTML content (unchanged, but adjust JS if STT is disabled)
+# HTML content (unchanged)
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -511,15 +510,33 @@ def stt_google(audio_path: str, language: str = 'en-US') -> str:
         except Exception as e:
             logging.error(f"Failed to delete temp file {wav_path}: {e}")
 
+def get_translate_client():
+    if not USE_GOOGLE_CLOUD:
+        return None
+    if translate_client is None:
+        import google.auth
+        from google.cloud import translate_v2
+        credentials_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+        if not credentials_json:
+            logging.error("GOOGLE_APPLICATION_CREDENTIALS_JSON not set. Falling back to deep-translator.")
+            global USE_GOOGLE_CLOUD
+            USE_GOOGLE_CLOUD = False
+            return None
+        import json
+        credentials = google.auth.credentials.Credentials.from_service_account_info(json.loads(credentials_json))
+        translate_client = translate_v2.Client(credentials=credentials)
+    return translate_client
+
 def translate_batch_text(text: str, target_lang: str) -> str:
     try:
         chunks = [text[i:i + MAX_REQUEST_CHARS] for i in range(0, len(text), MAX_REQUEST_CHARS)]
         if USE_GOOGLE_CLOUD:
-            translated_chunks = translate_client.translate(chunks, target_language=target_lang)
-            return " ".join([result['translatedText'] for result in translated_chunks])
-        else:
-            translated_chunks = [GoogleTranslator(source='auto', target=target_lang).translate(chunk) for chunk in chunks]
-            return " ".join(translated_chunks)
+            client = get_translate_client()
+            if client:
+                translated_chunks = client.translate(chunks, target_language=target_lang)
+                return " ".join([result['translatedText'] for result in translated_chunks])
+        translated_chunks = [GoogleTranslator(source='auto', target=target_lang).translate(chunk) for chunk in chunks]
+        return " ".join(translated_chunks)
     except Exception as e:
         logging.error(f"Translation Error: {e}")
         raise ValueError(f"Translation failed: {str(e)}")
