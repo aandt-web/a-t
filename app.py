@@ -7,31 +7,22 @@ from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
 from gtts import gTTS
 import tempfile
-from deep_translator import GoogleTranslator
-import speech_recognition as sr
 from pydub import AudioSegment
+from libretranslatepy import LibreTranslateAPI
 
 # Initialize Flask app
 app = Flask(__name__, static_folder='static')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, filename='app.log')
-logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+# Configure logging to ensure output to stdout
+logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler('app.log')])
 
 # Constants
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_TEXT_LENGTH = 5000  # Character limit for text processing
 MAX_REQUEST_CHARS = 5000  # Character limit for translation requests
 
-# Global variable declaration
-USE_GOOGLE_CLOUD = True  # Default to True if google-cloud-translate is installed
-translate_client = None  # Will be initialized lazily
-
-try:
-    import google.cloud.translate_v2 as translate
-except ImportError:
-    logging.warning("Google Cloud Translate not found. Falling back to deep-translator.")
-    USE_GOOGLE_CLOUD = False
+# Initialize LibreTranslate client (using public API for now)
+lt = LibreTranslateAPI("https://libretranslate.com")
 
 # Check for speech_recognition availability
 HAS_STT = True
@@ -116,57 +107,28 @@ def stt_google(audio_path: str, language: str = 'en-US') -> str:
         except Exception as e:
             logging.error(f"Failed to delete temp file {audio_path}: {e}")
 
-def get_translate_client():
-    global translate_client
-    if not USE_GOOGLE_CLOUD:
-        return None
-    if translate_client is None:
-        try:
-            from google.cloud import translate_v2
-            credentials_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-            if not credentials_json:
-                logging.error("GOOGLE_APPLICATION_CREDENTIALS_JSON not set. Falling back to deep-translator.")
-                USE_GOOGLE_CLOUD = False
-                return None
-            import json
-            from google.oauth2 import service_account
-            credentials = service_account.Credentials.from_service_account_info(json.loads(credentials_json))
-            translate_client = translate_v2.Client(credentials=credentials)
-        except Exception as e:
-            logging.error(f"Failed to initialize Google Translate client: {e}")
-            USE_GOOGLE_CLOUD = False
-            return None
-    return translate_client
-
 def translate_batch_text(text: str, target_lang: str) -> str:
     try:
         chunks = [text[i:i + MAX_REQUEST_CHARS] for i in range(0, len(text), MAX_REQUEST_CHARS)]
-        if USE_GOOGLE_CLOUD:
-            client = get_translate_client()
-            if client:
-                translated_chunks = client.translate(chunks, target_language=target_lang)
-                return " ".join([result['translatedText'] for result in translated_chunks])
         translated_chunks = []
-        for i in range(0, len(chunks), 10):  # Batch 10 chunks
-            batch = chunks[i:i + 10]
-            for attempt in range(3):
+        for chunk in chunks:
+            for attempt in range(3):  # Retry logic for robustness
                 try:
-                    translator = GoogleTranslator(source='auto', target=target_lang)
-                    translated_batch = translator.translate_batch(batch)
+                    translated = lt.translate(chunk, source='auto', target=target_lang)
+                    translated_chunks.append(translated)
                     break
                 except Exception as e:
                     logging.warning(f"Translation attempt {attempt + 1} failed: {e}")
                     time.sleep(2 * (attempt + 1))  # Exponential backoff
             else:
-                translated_batch = [translator.translate(chunk) for chunk in batch]  # Fallback to single
-            translated_chunks.extend(translated_batch)
-            time.sleep(0.5)  # Throttle to stay under 5 req/sec
+                raise ValueError("Translation failed after multiple attempts")
+            time.sleep(0.5)  # Throttle to avoid overloading public API
         return " ".join(translated_chunks)
     except Exception as e:
         logging.error(f"Translation Error: {e}")
         raise ValueError(f"Translation failed: {str(e)}")
 
-# HTML content (with your logo preserved)
+# HTML content (unchanged, just for reference)
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -202,7 +164,8 @@ INDEX_HTML = """
             }
           },
           boxShadow: {
-           glass: '0 10px 30px rgba(0,0,0,.35)'         },
+           glass: '0 10px 30px rgba(0,0,0,.35)'
+          },
           backdropBlur: {
             xs: '2px'
           }
@@ -240,7 +203,7 @@ INDEX_HTML = """
   <header class="w-full">
     <div class="mx-auto max-w-6xl px-4 py-5 flex items-center justify-between">
       <a href="#" class="flex items-center gap-3 group">
-        <img src="/static/logo.png" alt="Logo" class="h-11 w-11 object-contain">
+        <img src="/static/logo.png" alt="Logo" class="h-11 w-11 object-contain" onerror="this.style.display='none';">
         <div>
           <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
           <div class="text-xs text-slate-300/80 -mt-0.5">Transform • Translate • Speak</div>
