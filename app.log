@@ -1,0 +1,35 @@
+WARNING:root:SpeechRecognition not found or incompatible. STT functionality disabled.
+INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.100.211:5000
+INFO:werkzeug:[33mPress CTRL+C to quit[0m
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 12:50:30] "[35m[1mGET / HTTP/1.1[0m" 500 -
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 12:50:30] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 12:50:32] "[35m[1mGET / HTTP/1.1[0m" 500 -
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 12:59:06] "[35m[1mGET / HTTP/1.1[0m" 500 -
+WARNING:root:SpeechRecognition not found or incompatible. STT functionality disabled.
+INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.100.211:5000
+INFO:werkzeug:[33mPress CTRL+C to quit[0m
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 13:06:59] "[35m[1mGET / HTTP/1.1[0m" 500 -
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 13:07:02] "[35m[1mGET / HTTP/1.1[0m" 500 -
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 13:07:02] "[35m[1mGET / HTTP/1.1[0m" 500 -
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 13:07:02] "[35m[1mGET / HTTP/1.1[0m" 500 -
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 13:07:02] "[35m[1mGET / HTTP/1.1[0m" 500 -
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 13:07:02] "[35m[1mGET / HTTP/1.1[0m" 500 -
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 13:07:03] "[35m[1mGET / HTTP/1.1[0m" 500 -
+ERROR:root:Error rendering home page: unsupported format character '}' (0x7d) at index 1557
+INFO:werkzeug:192.168.100.211 - - [24/Aug/2025 13:07:03] "[35m[1mGET / HTTP/1.1[0m" 500 -
