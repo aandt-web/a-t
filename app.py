@@ -9,15 +9,14 @@ import speech_recognition as sr
 from pydub import AudioSegment
 import tempfile
 import os
+import requests
 
-# ✅ Google Cloud Translation API
-from google.cloud import translate_v2 as translate
-translate_client = translate.Client()
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-
-# HTML content (updated with audio-to-audio mode)
+# HTML content (using your provided INDEX_HTML)
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -39,7 +38,7 @@ INDEX_HTML = """
               300: '#c4b5fd',
               400: '#a78bfa',
               500: '#8b5cf6',
-              600: '#7c3aed', // primary accent (close to #7C3AED)
+              600: '#7c3aed',
               700: '#6b21a8',
               800: '#581c87',
               900: '#3b0764'
@@ -68,11 +67,11 @@ INDEX_HTML = """
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-start: #0f172a; /* slate-900 */
-      --bg-end: #111827;   /* gray-900  */
-      --grad-1: #1A1A2E;   /* matches your current theme */
+      --bg-start: #0f172a;
+      --bg-end: #111827;
+      --grad-1: #1A1A2E;
       --grad-2: #16213E;
-      --logo-grad-1: #6B46C1; /* keep logo/icon color family */
+      --logo-grad-1: #6B46C1;
       --logo-grad-2: #4C51BF;
     }
     html, body { height: 100% }
@@ -94,7 +93,6 @@ INDEX_HTML = """
   </style>
 </head>
 <body class="animated-bg min-h-screen text-slate-100 flex flex-col">
-  <!-- Header / Nav -->
   <header class="w-full">
     <div class="mx-auto max-w-6xl px-4 py-5 flex items-center justify-between">
       <a href="#" class="flex items-center gap-3 group">
@@ -110,8 +108,6 @@ INDEX_HTML = """
       </div>
     </div>
   </header>
-
-  <!-- Hero -->
   <section class="mx-auto max-w-6xl px-4 pb-6">
     <div class="grid lg:grid-cols-2 gap-6 items-stretch">
       <div class="glass rounded-2xl shadow-glass p-6 md:p-8 flex flex-col justify-center">
@@ -147,11 +143,8 @@ INDEX_HTML = """
           </li>
         </ul>
       </div>
-
-      <!-- Card: Tool Form -->
       <div class="glass rounded-2xl shadow-glass p-6 md:p-8">
         <form id="toolForm" class="space-y-5" enctype="multipart/form-data">
-          <!-- Mode -->
           <div>
             <label class="block text-sm font-semibold mb-2" for="mode">Processing Mode</label>
             <div class="relative">
@@ -168,24 +161,21 @@ INDEX_HTML = """
               </div>
             </div>
           </div>
-          <!-- Target Language -->
-    <div id="langDiv">
-  <label class="block text-sm font-semibold mb-2" for="lang">Target Language</label>
-  <div class="relative">
-    <select id="lang" name="lang" class="w-full appearance-none rounded-xl bg-slate-900/60 border border-white/10 px-4 py-3 pr-10 focus:outline-none focus:ring-2 focus:ring-brand-400">
-      <option value="en">English</option>
-      <option value="my">Myanmar</option>
-      <option value="fr">French</option>
-      <option value="es">Spanish</option>
-      <option value="de">German</option>
-    </select>
-    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300"><path d="M6 9l6 6 6-6"/></svg>
-    </div>
-  </div>
-</div>
-
-          <!-- PDF Input -->
+          <div id="langDiv">
+            <label class="block text-sm font-semibold mb-2" for="lang">Target Language</label>
+            <div class="relative">
+              <select id="lang" name="lang" class="w-full appearance-none rounded-xl bg-slate-900/60 border border-white/10 px-4 py-3 pr-10 focus:outline-none focus:ring-2 focus:ring-brand-400">
+                <option value="en">English</option>
+                <option value="my">Myanmar</option>
+                <option value="fr">French</option>
+                <option value="es">Spanish</option>
+                <option value="de">German</option>
+              </select>
+              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300"><path d="M6 9l6 6 6-6"/></svg>
+              </div>
+            </div>
+          </div>
           <div id="pdfInput">
             <label class="block text-sm font-semibold mb-2" for="pdf">1. Upload PDF</label>
             <label class="group flex items-center justify-between gap-4 rounded-xl border border-dashed border-white/15 bg-slate-900/50 p-4 hover:border-brand-300 cursor-pointer">
@@ -202,8 +192,6 @@ INDEX_HTML = """
               <span id="pdfName" class="text-xs text-slate-300">No file chosen</span>
             </label>
           </div>
-
-          <!-- Audio Input -->
           <div id="audioInput" class="hidden">
             <label class="block text-sm font-semibold mb-2" for="audio">1. Upload Audio</label>
             <label class="group flex items-center justify-between gap-4 rounded-xl border border-dashed border-white/15 bg-slate-900/50 p-4 hover:border-brand-300 cursor-pointer">
@@ -220,25 +208,17 @@ INDEX_HTML = """
               <span id="audioName" class="text-xs text-slate-300">No file chosen</span>
             </label>
           </div>
-
-          <!-- STT language -->
           <div id="sttLangRow" class="hidden">
             <label for="stt_lang" class="block text-sm font-semibold mb-2">Speech Language (for STT)</label>
             <input id="stt_lang" name="stt_lang" type="text" value="en-US" placeholder="e.g., en-US, fr-FR" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-brand-400"/>
           </div>
-
-          <!-- Submit -->
           <button type="submit" class="btn-primary w-full rounded-xl py-3.5 font-semibold text-white shadow-lg active:scale-[.99] transition">2. Start Processing</button>
-
-          <!-- Progress -->
           <div id="progressWrap" class="hidden h-2 w-full overflow-hidden rounded bg-white/10">
             <div class="h-full w-0 bg-white/60 animate-[loader_2s_ease_infinite]"></div>
           </div>
           <style>
             @keyframes loader { 0% { width: 0 } 50% { width: 80% } 100% { width: 100% } }
           </style>
-
-          <!-- Output -->
           <div class="space-y-3 pt-2">
             <audio id="player" class="hidden w-full" controls></audio>
             <textarea id="outputText" class="hidden w-full min-h-[140px] rounded-xl bg-slate-900/60 border border-white/10 p-3 text-sm" placeholder="Results will appear here"></textarea>
@@ -247,8 +227,6 @@ INDEX_HTML = """
       </div>
     </div>
   </section>
-
-  <!-- Features band -->
   <section class="mx-auto max-w-6xl px-4 pb-10">
     <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <div class="glass rounded-xl p-4 flex items-start gap-3">
@@ -289,15 +267,11 @@ INDEX_HTML = """
       </div>
     </div>
   </section>
-
-  <!-- Footer -->
   <footer class="mt-auto border-t border-white/10">
     <div class="mx-auto max-w-6xl px-4 py-6 text-center text-sm text-slate-300">
       © A&T Group at Strategy First AI Hackathon 2025
     </div>
   </footer>
-
-  <!-- App Logic -->
   <script>
     const modeSel = document.getElementById('mode');
     const pdfInput = document.getElementById('pdfInput');
@@ -351,13 +325,13 @@ INDEX_HTML = """
         if (!pdf) { alert('Please choose a PDF.'); progressWrap.classList.add('hidden'); return; }
         if (pdf.size > maxFileSize) { alert('Document is too large (max 10MB).'); progressWrap.classList.add('hidden'); return; }
         fd.append('pdf', pdf);
-        if (m !== 'pdf_audio') fd.append('lang', lang); // Only append lang if not pdf_audio
+        if (m !== 'pdf_audio') fd.append('lang', lang);
       } else {
         const audio = audioFileInput.files[0];
         if (!audio) { alert('Please choose an audio file.'); progressWrap.classList.add('hidden'); return; }
         if (audio.size > maxFileSize) { alert('Audio is too large (max 10MB).'); progressWrap.classList.add('hidden'); return; }
         fd.append('audio', audio);
-        if (m !== 'audio_text') fd.append('lang', lang); // Only append lang if not audio_text
+        if (m !== 'audio_text') fd.append('lang', lang);
         fd.append('stt_lang', sttLang);
       }
 
@@ -416,9 +390,14 @@ def extract_text_from_pdf(pdf_file):
 # ---------- Translation ----------
 def translate_text(text, target_lang="en"):
     try:
-        result = translate_client.translate(text, target_language=target_lang)
-        return result["translatedText"]
-    except Exception as e:
+        response = requests.post(
+            "http://192.168.100.211:5000/translate",
+            json={"q": text, "source": "en", "target": target_lang},
+            headers={"Content-Type": "application/json"}
+        )
+        response.raise_for_status()
+        return response.json().get("translatedText")
+    except requests.RequestException as e:
         logging.error(f"Translation Error: {e}")
         return None
 
@@ -449,13 +428,38 @@ def text_to_speech(text, lang="en"):
 # ---------- Routes ----------
 @app.route("/")
 def home():
-    return "Lingua-Flow (Google Translate API version)"
+    return INDEX_HTML
 
-# --- PDF Upload & Translate ---
-@app.route("/pdf/translate", methods=["POST"])
-def pdf_translate():
-    file = request.files.get("file")
-    target_lang = request.form.get("target_lang", "en")
+# --- PDF → Audio ---
+@app.route("/pdf-to-audio", methods=["POST"])
+def pdf_to_audio():
+    file = request.files.get("pdf")
+    if not file:
+        return jsonify({"error": "No PDF uploaded"}), 400
+
+    text = extract_text_from_pdf(file)
+    if not text:
+        return jsonify({"error": "PDF extraction failed"}), 500
+
+    audio_path = text_to_speech(text)
+    if not audio_path:
+        return jsonify({"error": "TTS failed"}), 500
+
+    @after_this_request
+    def cleanup(response):
+        try:
+            os.remove(audio_path)
+        except Exception as e:
+            logging.error(f"Cleanup error: {e}")
+        return response
+
+    return send_file(audio_path, as_attachment=True, download_name="audio.mp3")
+
+# --- PDF → Translate ---
+@app.route("/pdf-to-translate", methods=["POST"])
+def pdf_to_translate():
+    file = request.files.get("pdf")
+    target_lang = request.form.get("lang", "en")
 
     if not file:
         return jsonify({"error": "No PDF uploaded"}), 400
@@ -468,13 +472,13 @@ def pdf_translate():
     if not translated:
         return jsonify({"error": "Translation failed"}), 500
 
-    return jsonify({"translated": translated})
+    return jsonify({"translated_text": translated})
 
-# --- PDF → Translate + Audio ---
-@app.route("/pdf/translate_audio", methods=["POST"])
-def pdf_translate_audio():
-    file = request.files.get("file")
-    target_lang = request.form.get("target_lang", "en")
+# --- PDF → Translate → Audio ---
+@app.route("/pdf-to-translate-audio", methods=["POST"])
+def pdf_to_translate_audio():
+    file = request.files.get("pdf")
+    target_lang = request.form.get("lang", "en")
 
     if not file:
         return jsonify({"error": "No PDF uploaded"}), 400
@@ -502,10 +506,10 @@ def pdf_translate_audio():
     return send_file(audio_path, as_attachment=True, download_name="translated_audio.mp3")
 
 # --- Audio → Text ---
-@app.route("/audio/transcribe", methods=["POST"])
-def audio_transcribe():
-    file = request.files.get("file")
-    lang = request.form.get("lang", "en-US")
+@app.route("/audio-to-text", methods=["POST"])
+def audio_to_text():
+    file = request.files.get("audio")
+    stt_lang = request.form.get("stt_lang", "en-US")
 
     if not file:
         return jsonify({"error": "No audio uploaded"}), 400
@@ -513,19 +517,19 @@ def audio_transcribe():
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     file.save(tmp_file.name)
 
-    text = speech_to_text(tmp_file.name, lang)
+    text = speech_to_text(tmp_file.name, stt_lang)
     os.remove(tmp_file.name)
 
     if not text:
         return jsonify({"error": "STT failed"}), 500
 
-    return jsonify({"transcribed": text})
+    return jsonify({"text": text})
 
 # --- Audio → Translate ---
-@app.route("/audio/translate", methods=["POST"])
-def audio_translate():
-    file = request.files.get("file")
-    target_lang = request.form.get("target_lang", "en")
+@app.route("/audio-to-translate", methods=["POST"])
+def audio_to_translate():
+    file = request.files.get("audio")
+    target_lang = request.form.get("lang", "en")
 
     if not file:
         return jsonify({"error": "No audio uploaded"}), 400
@@ -543,13 +547,14 @@ def audio_translate():
     if not translated:
         return jsonify({"error": "Translation failed"}), 500
 
-    return jsonify({"translated": translated})
+    return jsonify({"translated_text": translated})
 
-# --- Audio → Translate + Speak ---
-@app.route("/audio/translate_audio", methods=["POST"])
-def audio_translate_audio():
-    file = request.files.get("file")
-    target_lang = request.form.get("target_lang", "en")
+# --- Audio → Audio ---
+@app.route("/audio-to-audio", methods=["POST"])
+def audio_to_audio():
+    file = request.files.get("audio")
+    target_lang = request.form.get("lang", "en")
+    stt_lang = request.form.get("stt_lang", "en-US")
 
     if not file:
         return jsonify({"error": "No audio uploaded"}), 400
@@ -557,7 +562,7 @@ def audio_translate_audio():
     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     file.save(tmp_file.name)
 
-    text = speech_to_text(tmp_file.name)
+    text = speech_to_text(tmp_file.name, stt_lang)
     os.remove(tmp_file.name)
 
     if not text:
