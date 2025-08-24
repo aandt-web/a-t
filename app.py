@@ -1,134 +1,22 @@
 import logging
+import subprocess
 import time
-import os
-import sys
 from flask import Flask, request, send_file, jsonify, after_this_request
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
 from gtts import gTTS
-import tempfile
+import speech_recognition as sr
 from pydub import AudioSegment
-from libretranslatepy import LibreTranslateAPI
+import tempfile
+import os
+import requests
 
-# Initialize Flask app
-app = Flask(__name__, static_folder='static')
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
-# Configure logging to ensure output to stdout
-logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler('app.log')])
+app = Flask(__name__)
 
-# Constants
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-MAX_TEXT_LENGTH = 5000  # Character limit for text processing
-MAX_REQUEST_CHARS = 5000  # Character limit for translation requests
-
-# Initialize LibreTranslate client (using public API for now)
-lt = LibreTranslateAPI("https://libretranslate.com")
-
-# Check for speech_recognition availability
-HAS_STT = True
-VALID_STT_LANGS = ['en-US', 'fr-FR', 'es-ES', 'de-DE', 'my-MM']  # Supported STT languages
-try:
-    import speech_recognition as sr
-except ImportError:
-    logging.warning("SpeechRecognition not found or incompatible. STT functionality disabled.")
-    HAS_STT = False
-
-# Helper functions
-def check_file_size(file):
-    file.seek(0, os.SEEK_END)
-    file_size = file.tell()
-    file.seek(0)  # Reset file pointer to the beginning
-    if file_size > MAX_FILE_SIZE:
-        raise ValueError(f"File size exceeds the limit of {MAX_FILE_SIZE / (1024 * 1024)}MB")
-
-def extract_text_from_pdf(pdf_file) -> str:
-    try:
-        check_file_size(pdf_file)
-        reader = PdfReader(pdf_file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
-        if len(text) > MAX_TEXT_LENGTH:
-            text = text[:MAX_TEXT_LENGTH]
-            logging.warning(f"PDF text truncated to {MAX_TEXT_LENGTH} characters.")
-        return text
-    except PdfReadError as e:
-        raise ValueError(f"Failed to read PDF: {str(e)}")
-    except Exception as e:
-        raise ValueError(f"Error extracting text from PDF: {str(e)}")
-
-def tts_to_tempfile(text: str, lang: str) -> str:
-    try:
-        tts = gTTS(text=text, lang=lang, slow=False)
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        tts.save(temp_file.name)
-        temp_file.close()
-        return temp_file.name
-    except Exception as e:
-        raise ValueError(f"Text-to-speech conversion failed: {str(e)}")
-
-def convert_to_wav(audio_file) -> str:
-    try:
-        check_file_size(audio_file)
-        temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=f".{audio_file.filename.split('.')[-1]}")
-        audio_file.save(temp_input.name)
-        temp_input.close()
-
-        audio = AudioSegment.from_file(temp_input.name)
-        wav_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-        audio.export(wav_path, format="wav")
-        os.unlink(temp_input.name)  # Clean up input temp file
-        return wav_path
-    except Exception as e:
-        raise ValueError(f"Audio conversion failed: {str(e)}")
-
-def validate_stt_lang(lang: str) -> str:
-    if lang not in VALID_STT_LANGS:
-        logging.warning(f"Unsupported STT language '{lang}'. Falling back to 'en-US'.")
-        return 'en-US'
-    return lang
-
-def stt_google(audio_path: str, language: str = 'en-US') -> str:
-    if not HAS_STT:
-        raise ValueError("Speech-to-Text functionality is disabled.")
-    language = validate_stt_lang(language)
-    recognizer = sr.Recognizer()
-    try:
-        with sr.AudioFile(audio_path) as source:
-            audio_data = recognizer.record(source)
-        return recognizer.recognize_google(audio_data, language=language)
-    except sr.UnknownValueError:
-        raise ValueError("Could not understand the audio.")
-    except sr.RequestError as e:
-        raise ValueError(f"Speech service error: {e}")
-    finally:
-        try:
-            os.unlink(audio_path)
-        except Exception as e:
-            logging.error(f"Failed to delete temp file {audio_path}: {e}")
-
-def translate_batch_text(text: str, target_lang: str) -> str:
-    try:
-        chunks = [text[i:i + MAX_REQUEST_CHARS] for i in range(0, len(text), MAX_REQUEST_CHARS)]
-        translated_chunks = []
-        for chunk in chunks:
-            for attempt in range(3):  # Retry logic for robustness
-                try:
-                    translated = lt.translate(chunk, source='auto', target=target_lang)
-                    translated_chunks.append(translated)
-                    break
-                except Exception as e:
-                    logging.warning(f"Translation attempt {attempt + 1} failed: {e}")
-                    time.sleep(2 * (attempt + 1))  # Exponential backoff
-            else:
-                raise ValueError("Translation failed after multiple attempts")
-            time.sleep(0.5)  # Throttle to avoid overloading public API
-        return " ".join(translated_chunks)
-    except Exception as e:
-        logging.error(f"Translation Error: {e}")
-        raise ValueError(f"Translation failed: {str(e)}")
-
-# HTML content (unchanged, just for reference)
+# HTML content (using your provided INDEX_HTML)
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -136,6 +24,7 @@ INDEX_HTML = """
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Lingua Flow – Transform Documents & Audio with AI</title>
+  <!-- Tailwind (CDN for quick drop-in) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -164,7 +53,7 @@ INDEX_HTML = """
             }
           },
           boxShadow: {
-           glass: '0 10px 30px rgba(0,0,0,.35)'
+            glass: '0 10px 30px rgba(0,0,0,.35)'
           },
           backdropBlur: {
             xs: '2px'
@@ -192,7 +81,11 @@ INDEX_HTML = """
       background-size: 400% 400%;
       animation: gradientShift 18s ease infinite;
     }
-    @keyframes gradientShift { 0% { background-position: 0% 50% } 50% { background-position: 100% 50% } 100% { background-position: 0% 50% } }
+    @keyframes gradientShift {
+      0% { background-position: 0% 50% }
+      50% { background-position: 100% 50% }
+      100% { background-position: 0% 50% }
+    }
     .glass { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08); }
     .btn-primary { background: linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2)); }
     .btn-primary:hover { filter: brightness(1.1) }
@@ -203,7 +96,7 @@ INDEX_HTML = """
   <header class="w-full">
     <div class="mx-auto max-w-6xl px-4 py-5 flex items-center justify-between">
       <a href="#" class="flex items-center gap-3 group">
-        <img src="/static/logo.png" alt="Logo" class="h-11 w-11 object-contain" onerror="this.style.display='none';">
+        <img src="/static/logo.png" alt="Logo" class="h-11 w-11 object-contain">
         <div>
           <div class="text-xl font-extrabold tracking-tight leading-5">Lingua Flow</div>
           <div class="text-xs text-slate-300/80 -mt-0.5">Transform • Translate • Speak</div>
@@ -242,7 +135,7 @@ INDEX_HTML = """
             </svg>
             Natural‑sounding text‑to‑speech
           </li>
-          <li class="flex items-start gap-3" style="%(stt_disabled)s">
+          <li class="flex items-start gap-3">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mt-0.5 text-brand-300">
               <path d="M20 6L9 17l-5-5"/>
             </svg>
@@ -259,7 +152,9 @@ INDEX_HTML = """
                 <option value="pdf_audio">PDF → Audio • Convert PDF text to speech</option>
                 <option value="pdf_translate">PDF → Translate • Extract & translate text</option>
                 <option value="pdf_translate_audio">PDF → Translate → Audio • Translate then speech</option>
-                %(stt_options)s
+                <option value="audio_text">Audio → Text • Speech to text</option>
+                <option value="audio_translate">Audio → Translate • STT and translate</option>
+                <option value="audio_audio">Audio → Audio • Speak back in target language</option>
               </select>
               <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-300"><path d="M6 9l6 6 6-6"/></svg>
@@ -345,7 +240,7 @@ INDEX_HTML = """
       </div>
       <div class="glass rounded-xl p-4 flex items-start gap-3">
         <div class="rounded-md p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
         </div>
         <div>
           <div class="font-semibold">Translate</div>
@@ -361,7 +256,7 @@ INDEX_HTML = """
           <div class="text-xs text-slate-300">Natural voices, quick output.</div>
         </div>
       </div>
-      <div class="glass rounded-xl p-4 flex items-start gap-3" style="%(stt_disabled)s">
+      <div class="glass rounded-xl p-4 flex items-start gap-3">
         <div class="rounded-md p-2" style="background:linear-gradient(90deg, var(--logo-grad-1), var(--logo-grad-2))">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 5v6"/><rect x="9" y="11" width="6" height="8" rx="2"/></svg>
         </div>
@@ -391,257 +286,306 @@ INDEX_HTML = """
     const pdfName = document.getElementById('pdfName');
     const audioName = document.getElementById('audioName');
 
-    // Disable STT-related options if not available
-    const sttDisabled = !%(has_stt)s;
-    if (sttDisabled) {
-      const sttOptions = `
-        <option value="audio_text" disabled>Audio → Text • Speech to text (Disabled)</option>
-        <option value="audio_translate" disabled>Audio → Translate • STT and translate (Disabled)</option>
-        <option value="audio_audio" disabled>Audio → Audio • Speak back (Disabled)</option>
-      `;
-      document.getElementById('mode').innerHTML += sttOptions;
-      document.querySelectorAll('#sttLangRow, .stt-feature').forEach(el => el.style.display = 'none');
-    }
-
     function updateFormVisibility() {
       const m = modeSel.value;
       const pdfNeeded = (m === 'pdf_audio' || m === 'pdf_translate' || m === 'pdf_translate_audio');
-      const audioNeeded = (m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio');
-      const sttLangNeeded = (m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio') && !sttDisabled;
-      const langNeeded = (m === 'pdf_audio' || m === 'pdf_translate' || m === 'pdf_translate_audio' || m === 'audio_translate' || m === 'audio_audio');
-
       pdfInput.classList.toggle('hidden', !pdfNeeded);
-      audioInput.classList.toggle('hidden', !audioNeeded);
-      sttLangRow.classList.toggle('hidden', !sttLangNeeded);
-      langDiv.classList.toggle('hidden', !langNeeded);
+      audioInput.classList.toggle('hidden', pdfNeeded);
+      sttLangRow.classList.toggle('hidden', !(m === 'audio_text' || m === 'audio_translate' || m === 'audio_audio'));
+      langDiv.classList.toggle('hidden', m === 'pdf_audio' || m === 'audio_text');
+    }
 
-      // Reset file inputs when switching modes
-      if (pdfNeeded) {
-        audioFileInput.value = '';
-        audioName.textContent = 'No file chosen';
-      } else if (audioNeeded) {
-        pdfFileInput.value = '';
-        pdfName.textContent = 'No file chosen';
-      }
+    function updateFileStatus() {
+      const p = pdfFileInput?.files?.[0];
+      const a = audioFileInput?.files?.[0];
+      if (p) pdfName.textContent = p.name; else pdfName.textContent = 'No file chosen';
+      if (a) audioName.textContent = a.name; else audioName.textContent = 'No file chosen';
     }
 
     modeSel.addEventListener('change', updateFormVisibility);
-    updateFormVisibility(); // Initial call
+    pdfFileInput.addEventListener('change', updateFileStatus);
+    audioFileInput.addEventListener('change', updateFileStatus);
+    updateFormVisibility();
 
-    pdfFileInput.addEventListener('change', function() {
-      pdfName.textContent = this.files.length > 0 ? this.files[0].name : 'No file chosen';
-    });
-
-    audioFileInput.addEventListener('change', function() {
-      audioName.textContent = this.files.length > 0 ? this.files[0].name : 'No file chosen';
-    });
-
-    document.getElementById('toolForm').addEventListener('submit', async function(e) {
+    document.getElementById('toolForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       progressWrap.classList.remove('hidden');
       player.classList.add('hidden');
       outputText.classList.add('hidden');
       outputText.value = '';
 
-      const mode = modeSel.value;
-      const formData = new FormData(this);
-      let url = '';
+      const m = modeSel.value;
+      const lang = document.getElementById('lang').value;
+      const sttLang = document.getElementById('stt_lang').value;
+      const maxFileSize = 10 * 1024 * 1024; // 10MB
 
-      if (mode === 'pdf_audio') {
-        url = '/pdf-to-audio';
-      } else if (mode === 'pdf_translate') {
-        url = '/pdf-to-translate';
-      } else if (mode === 'pdf_translate_audio') {
-        url = '/pdf-to-translate-audio';
-      } else if (mode === 'audio_text') {
-        url = '/audio-to-text';
-      } else if (mode === 'audio_translate') {
-        url = '/audio-to-translate';
-      } else if (mode === 'audio_audio') {
-        url = '/audio-to-audio';
+      const fd = new FormData();
+      if (m.startsWith('pdf')) {
+        const pdf = pdfFileInput.files[0];
+        if (!pdf) { alert('Please choose a PDF.'); progressWrap.classList.add('hidden'); return; }
+        if (pdf.size > maxFileSize) { alert('Document is too large (max 10MB).'); progressWrap.classList.add('hidden'); return; }
+        fd.append('pdf', pdf);
+        if (m !== 'pdf_audio') fd.append('lang', lang);
+      } else {
+        const audio = audioFileInput.files[0];
+        if (!audio) { alert('Please choose an audio file.'); progressWrap.classList.add('hidden'); return; }
+        if (audio.size > maxFileSize) { alert('Audio is too large (max 10MB).'); progressWrap.classList.add('hidden'); return; }
+        fd.append('audio', audio);
+        if (m !== 'audio_text') fd.append('lang', lang);
+        fd.append('stt_lang', sttLang);
       }
+
+      const endpoints = {
+        pdf_audio: '/pdf-to-audio',
+        pdf_translate: '/pdf-to-translate',
+        pdf_translate_audio: '/pdf-to-translate-audio',
+        audio_text: '/audio-to-text',
+        audio_translate: '/audio-to-translate',
+        audio_audio: '/audio-to-audio'
+      };
 
       try {
-        const response = await fetch(url, {
-          method: 'POST',
-          body: formData
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(errorText || 'An unknown error occurred.');
+        const res = await fetch(endpoints[m], { method: 'POST', body: fd });
+        if (!res.ok) {
+          const msg = await res.text();
+          alert(`Error: ${msg}`);
+          progressWrap.classList.add('hidden');
+          return;
         }
 
-        if (mode.includes('audio') && !mode.includes('text')) { // If the result is an audio file
-          const blob = await response.blob();
-          const audioUrl = URL.createObjectURL(blob);
-          player.src = audioUrl;
+        if (m === 'pdf_audio' || m === 'pdf_translate_audio' || m === 'audio_audio') {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          player.src = url;
           player.classList.remove('hidden');
-        } else { // If the result is text/json
-          const data = await response.json();
-          outputText.value = data.translated_text || data.text || JSON.stringify(data, null, 2);
+        } else {
+          const data = await res.json();
+          const text = data.translated_text || data.text || JSON.stringify(data);
+          outputText.value = text;
           outputText.classList.remove('hidden');
         }
-      } catch (error) {
-        console.error('Error:', error);
-        outputText.value = 'Error: ' + error.message;
-        outputText.classList.remove('hidden');
-      } finally {
-        progressWrap.classList.add('hidden');
+      } catch (e) {
+        alert(`Network error: ${e.message}`);
       }
+
+      progressWrap.classList.add('hidden');
     });
   </script>
 </body>
 </html>
 """
 
+# ---------- PDF Handling ----------
+def extract_text_from_pdf(pdf_file):
+    try:
+        pdf = PdfReader(pdf_file)
+        text = ""
+        for page in pdf.pages:
+            text += page.extract_text() or ""
+        return text
+    except PdfReadError as e:
+        logging.error(f"PDF Read Error: {e}")
+        return None
+
+# ---------- Translation ----------
+def translate_text(text, target_lang="en"):
+    try:
+        response = requests.post(
+            "http://192.168.100.211:5000/translate",
+            json={"q": text, "source": "en", "target": target_lang},
+            headers={"Content-Type": "application/json"}
+        )
+        response.raise_for_status()
+        return response.json().get("translatedText")
+    except requests.RequestException as e:
+        logging.error(f"Translation Error: {e}")
+        return None
+
+# ---------- Speech to Text ----------
+def speech_to_text(audio_file, lang="en-US"):
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(audio_file) as source:
+        audio = recognizer.record(source)
+    try:
+        return recognizer.recognize_google(audio, language=lang)
+    except sr.UnknownValueError:
+        return None
+    except sr.RequestError as e:
+        logging.error(f"STT Error: {e}")
+        return None
+
+# ---------- Text to Speech ----------
+def text_to_speech(text, lang="en"):
+    try:
+        tts = gTTS(text=text, lang=lang)
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        tts.save(tmp_file.name)
+        return tmp_file.name
+    except Exception as e:
+        logging.error(f"TTS Error: {e}")
+        return None
+
 # ---------- Routes ----------
-@app.route('/')
+@app.route("/")
 def home():
-    stt_disabled_style = 'display: none;' if not HAS_STT else ''
-    stt_options = '' if not HAS_STT else '''
-        <option value="audio_text">Audio → Text • Speech to text</option>
-        <option value="audio_translate">Audio → Translate • STT and translate</option>
-        <option value="audio_audio">Audio → Audio • Speak back in target language</option>
-    '''
-    try:
-        html = INDEX_HTML % {
-            'stt_disabled': stt_disabled_style,
-            'stt_options': stt_options,
-            'has_stt': str(HAS_STT).lower()
-        }
-        logging.info("Home page rendered successfully")
-        return html
-    except Exception as e:
-        logging.error(f"Error rendering home page: {str(e)}")
-        return str(e), 500
+    return INDEX_HTML
 
-@app.route('/pdf-to-audio', methods=['POST'])
+# --- PDF → Audio ---
+@app.route("/pdf-to-audio", methods=["POST"])
 def pdf_to_audio():
-    try:
-        pdf = request.files.get('pdf')
-        lang = request.form.get('lang', 'en')
-        if not pdf:
-            return "No PDF uploaded", 400
-        text = extract_text_from_pdf(pdf)
-        mp3_path = tts_to_tempfile(text, lang)
+    file = request.files.get("pdf")
+    if not file:
+        return jsonify({"error": "No PDF uploaded"}), 400
 
-        @after_this_request
-        def cleanup(response):
-            try:
-                os.remove(mp3_path)
-            except Exception as e:
-                logging.error(f"Failed to delete temp file {mp3_path}: {e}")
-            return response
+    text = extract_text_from_pdf(file)
+    if not text:
+        return jsonify({"error": "PDF extraction failed"}), 500
 
-        return send_file(mp3_path, mimetype='audio/mpeg', as_attachment=True, download_name='audiobook.mp3')
-    except Exception as e:
-        logging.error(f"Error in pdf_to_audio: {str(e)}")
-        return str(e), 400
+    audio_path = text_to_speech(text)
+    if not audio_path:
+        return jsonify({"error": "TTS failed"}), 500
 
-@app.route('/pdf-to-translate', methods=['POST'])
+    @after_this_request
+    def cleanup(response):
+        try:
+            os.remove(audio_path)
+        except Exception as e:
+            logging.error(f"Cleanup error: {e}")
+        return response
+
+    return send_file(audio_path, as_attachment=True, download_name="audio.mp3")
+
+# --- PDF → Translate ---
+@app.route("/pdf-to-translate", methods=["POST"])
 def pdf_to_translate():
-    try:
-        pdf = request.files.get('pdf')
-        target = request.form.get('lang', 'en')
-        if not pdf:
-            return "No PDF uploaded", 400
-        text = extract_text_from_pdf(pdf)
-        translated = translate_batch_text(text, target)
-        return jsonify({"translated_text": translated})
-    except Exception as e:
-        logging.error(f"Error in pdf_to_translate: {str(e)}")
-        return str(e), 400
+    file = request.files.get("pdf")
+    target_lang = request.form.get("lang", "en")
 
-@app.route('/pdf-to-translate-audio', methods=['POST'])
+    if not file:
+        return jsonify({"error": "No PDF uploaded"}), 400
+
+    text = extract_text_from_pdf(file)
+    if not text:
+        return jsonify({"error": "PDF extraction failed"}), 500
+
+    translated = translate_text(text, target_lang)
+    if not translated:
+        return jsonify({"error": "Translation failed"}), 500
+
+    return jsonify({"translated_text": translated})
+
+# --- PDF → Translate → Audio ---
+@app.route("/pdf-to-translate-audio", methods=["POST"])
 def pdf_to_translate_audio():
-    try:
-        pdf = request.files.get('pdf')
-        target = request.form.get('lang', 'en')
-        if not pdf:
-            return "No PDF uploaded", 400
-        text = extract_text_from_pdf(pdf)
-        translated = translate_batch_text(text, target)
-        mp3_path = tts_to_tempfile(translated, target)
+    file = request.files.get("pdf")
+    target_lang = request.form.get("lang", "en")
 
-        @after_this_request
-        def cleanup(response):
-            try:
-                os.remove(mp3_path)
-            except Exception as e:
-                logging.error(f"Failed to delete temp file {mp3_path}: {e}")
-            return response
+    if not file:
+        return jsonify({"error": "No PDF uploaded"}), 400
 
-        return send_file(mp3_path, mimetype='audio/mpeg', as_attachment=True, download_name='translated_audiobook.mp3')
-    except Exception as e:
-        logging.error(f"Error in pdf_to_translate_audio: {str(e)}")
-        return str(e), 400
+    text = extract_text_from_pdf(file)
+    if not text:
+        return jsonify({"error": "PDF extraction failed"}), 500
 
-@app.route('/audio-to-text', methods=['POST'])
+    translated = translate_text(text, target_lang)
+    if not translated:
+        return jsonify({"error": "Translation failed"}), 500
+
+    audio_path = text_to_speech(translated, lang=target_lang)
+    if not audio_path:
+        return jsonify({"error": "TTS failed"}), 500
+
+    @after_this_request
+    def cleanup(response):
+        try:
+            os.remove(audio_path)
+        except Exception as e:
+            logging.error(f"Cleanup error: {e}")
+        return response
+
+    return send_file(audio_path, as_attachment=True, download_name="translated_audio.mp3")
+
+# --- Audio → Text ---
+@app.route("/audio-to-text", methods=["POST"])
 def audio_to_text():
-    if not HAS_STT:
-        return "Speech-to-Text functionality is disabled.", 400
-    try:
-        audio = request.files.get('audio')
-        stt_lang = request.form.get('stt_lang', 'en-US')
-        if not audio:
-            return "No audio uploaded", 400
-        wav_path = convert_to_wav(audio)
-        text = stt_google(wav_path, language=stt_lang)
-        os.remove(wav_path)
-        return jsonify({"text": text})
-    except Exception as e:
-        logging.error(f"Error in audio_to_text: {str(e)}")
-        return str(e), 400
+    file = request.files.get("audio")
+    stt_lang = request.form.get("stt_lang", "en-US")
 
-@app.route('/audio-to-translate', methods=['POST'])
+    if not file:
+        return jsonify({"error": "No audio uploaded"}), 400
+
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    file.save(tmp_file.name)
+
+    text = speech_to_text(tmp_file.name, stt_lang)
+    os.remove(tmp_file.name)
+
+    if not text:
+        return jsonify({"error": "STT failed"}), 500
+
+    return jsonify({"text": text})
+
+# --- Audio → Translate ---
+@app.route("/audio-to-translate", methods=["POST"])
 def audio_to_translate():
-    if not HAS_STT:
-        return "Speech-to-Text functionality is disabled.", 400
-    try:
-        audio = request.files.get('audio')
-        stt_lang = request.form.get('stt_lang', 'en-US')
-        target = request.form.get('lang', 'en')
-        if not audio:
-            return "No audio uploaded", 400
-        wav_path = convert_to_wav(audio)
-        text = stt_google(wav_path, language=stt_lang)
-        os.remove(wav_path)
-        translated = translate_batch_text(text, target)
-        return jsonify({"text": text, "translated_text": translated})
-    except Exception as e:
-        logging.error(f"Error in audio_to_translate: {str(e)}")
-        return str(e), 400
+    file = request.files.get("audio")
+    target_lang = request.form.get("lang", "en")
 
-@app.route('/audio-to-audio', methods=['POST'])
+    if not file:
+        return jsonify({"error": "No audio uploaded"}), 400
+
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    file.save(tmp_file.name)
+
+    text = speech_to_text(tmp_file.name)
+    os.remove(tmp_file.name)
+
+    if not text:
+        return jsonify({"error": "STT failed"}), 500
+
+    translated = translate_text(text, target_lang)
+    if not translated:
+        return jsonify({"error": "Translation failed"}), 500
+
+    return jsonify({"translated_text": translated})
+
+# --- Audio → Audio ---
+@app.route("/audio-to-audio", methods=["POST"])
 def audio_to_audio():
-    if not HAS_STT:
-        return "Speech-to-Text functionality is disabled.", 400
-    try:
-        audio = request.files.get('audio')
-        stt_lang = request.form.get('stt_lang', 'en-US')
-        target = request.form.get('lang', 'en')
-        if not audio:
-            return "No audio uploaded", 400
-        wav_path = convert_to_wav(audio)
-        text = stt_google(wav_path, language=stt_lang)
-        os.remove(wav_path)
-        translated = translate_batch_text(text, target)
-        mp3_path = tts_to_tempfile(translated, target)
+    file = request.files.get("audio")
+    target_lang = request.form.get("lang", "en")
+    stt_lang = request.form.get("stt_lang", "en-US")
 
-        @after_this_request
-        def cleanup(response):
-            try:
-                os.remove(mp3_path)
-            except Exception as e:
-                logging.error(f"Failed to delete temp file {mp3_path}: {e}")
-            return response
+    if not file:
+        return jsonify({"error": "No audio uploaded"}), 400
 
-        return send_file(mp3_path, mimetype='audio/mpeg', as_attachment=True, download_name='translated_audio.mp3')
-    except Exception as e:
-        logging.error(f"Error in audio_to_audio: {str(e)}")
-        return str(e), 400
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    file.save(tmp_file.name)
 
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    text = speech_to_text(tmp_file.name, stt_lang)
+    os.remove(tmp_file.name)
+
+    if not text:
+        return jsonify({"error": "STT failed"}), 500
+
+    translated = translate_text(text, target_lang)
+    if not translated:
+        return jsonify({"error": "Translation failed"}), 500
+
+    audio_path = text_to_speech(translated, lang=target_lang)
+    if not audio_path:
+        return jsonify({"error": "TTS failed"}), 500
+
+    @after_this_request
+    def cleanup(response):
+        try:
+            os.remove(audio_path)
+        except Exception as e:
+            logging.error(f"Cleanup error: {e}")
+        return response
+
+    return send_file(audio_path, as_attachment=True, download_name="translated_audio.mp3")
+
+# ---------- Run ----------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
