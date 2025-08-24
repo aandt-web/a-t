@@ -1,0 +1,4 @@
+pre_build:
+  - pip install -r requirements.txt
+build:
+  runtime: python-3.10.13
