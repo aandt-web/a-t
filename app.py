@@ -4,7 +4,6 @@ import time
 from flask import Flask, request, send_file, jsonify, after_this_request
 from PyPDF2 import PdfReader
 from PyPDF2.errors import PdfReadError
-from deep_translator import GoogleTranslator
 from gtts import gTTS
 import speech_recognition as sr
 from pydub import AudioSegment
@@ -619,3 +618,4 @@ if __name__ == '__main__':
     # Run Flask app (Render sets PORT via env var)
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
